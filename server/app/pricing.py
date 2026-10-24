@@ -15,7 +15,7 @@ log = logging.getLogger("multichat.pricing")
 
 CATALOG_URL = "https://openrouter.ai/api/v1/models"  # public, no key needed
 CACHE_SECONDS = 6 * 3600
-_cache: tuple[float, dict[str, tuple[float, float]], dict[str, int]] | None = None
+_cache: tuple[float, dict[str, tuple[float, float]], dict[str, int], dict[str, dict[str, bool]]] | None = None
 
 # (substring of the endpoint's base URL or kind, OpenRouter id prefix)
 VENDORS = [
@@ -56,20 +56,28 @@ def vendor_prefix(kind: str, base_url: str | None) -> str | None:
     return None
 
 
-async def _catalog() -> tuple[dict[str, tuple[float, float]], dict[str, int]]:
-    """OpenRouter's public model list: normalised id -> (input, output) USD per 1M tokens, and -> context length.
-    Cached; empty if unreachable."""
+async def _catalog() -> tuple[dict[str, tuple[float, float]], dict[str, int], dict[str, dict[str, bool]]]:
+    """OpenRouter's public model list: normalised id -> (input, output) USD per 1M tokens, -> context length, and
+    -> capabilities {tools, images, effort}. Cached; empty if unreachable."""
     global _cache
     if _cache and time.monotonic() - _cache[0] < CACHE_SECONDS:
-        return _cache[1], _cache[2]
+        return _cache[1], _cache[2], _cache[3]
     prices: dict[str, tuple[float, float]] = {}
     contexts: dict[str, int] = {}
+    caps: dict[str, dict[str, bool]] = {}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             data = (await client.get(CATALOG_URL)).raise_for_status().json().get("data", [])
         for item in data:
             if isinstance(item.get("context_length"), int):
                 contexts.setdefault(_norm(item["id"]), item["context_length"])
+            params = item.get("supported_parameters")
+            modalities = (item.get("architecture") or {}).get("input_modalities")
+            if isinstance(params, list) or isinstance(modalities, list):
+                caps.setdefault(_norm(item["id"]), {
+                    **({"tools": "tools" in params, "effort": "reasoning" in params} if isinstance(params, list) else {}),
+                    **({"images": "image" in modalities} if isinstance(modalities, list) else {}),
+                })
             p = item.get("pricing") or {}
             try:
                 inp, out = float(p.get("prompt") or 0) * 1_000_000, float(p.get("completion") or 0) * 1_000_000
@@ -80,8 +88,8 @@ async def _catalog() -> tuple[dict[str, tuple[float, float]], dict[str, int]]:
     except (httpx.HTTPError, ValueError) as exc:
         log.info("OpenRouter price list unavailable: %s", exc)
     if prices:
-        _cache = (time.monotonic(), prices, contexts)
-    return prices, contexts
+        _cache = (time.monotonic(), prices, contexts, caps)
+    return prices, contexts, caps
 
 
 async def openrouter_prices() -> dict[str, tuple[float, float]]:
@@ -90,6 +98,11 @@ async def openrouter_prices() -> dict[str, tuple[float, float]]:
 
 async def openrouter_contexts() -> dict[str, int]:
     return (await _catalog())[1]
+
+
+async def openrouter_capabilities() -> dict[str, dict[str, bool]]:
+    """What OpenRouter knows a model can do: tool calls, image input, a reasoning-effort setting."""
+    return (await _catalog())[2]
 
 
 def lookup(prices: dict, prefix: str, model_name: str):  # noqa: ANN201 - prices or context lengths

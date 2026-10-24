@@ -148,7 +148,7 @@ final class MultiChatKitTests: XCTestCase {
          "supports_effort": true, "effort_levels": ["medium", "high"], "context_choices": [200000, 1000000]}
         """)
         XCTAssertEqual(p.efforts, ["medium", "high"])
-        let plain = try decode(Participant.self, #"{"model_id": 1, "display_name": "A", "color": "#000", "endpoint_kind": "mock", "position": 0}"#)
+        let plain = try decode(Participant.self, ##"{"model_id": 1, "display_name": "A", "color": "#000", "endpoint_kind": "mock", "position": 0}"##)
         XCTAssertEqual(plain.efforts, Effort.levels)
     }
 

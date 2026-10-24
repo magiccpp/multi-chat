@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         self.left_stack.addWidget(self.files)
         self.left_stack.addWidget(self.sessions)
         self.left = QDockWidget("Files")
+        self.left.setObjectName("files_dock")  # names let saveState()/restoreState() remember the layout
         self.left.setWidget(self.left_stack)
         self.left.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left)
@@ -81,10 +82,11 @@ class MainWindow(QMainWindow):
         # right: chat
         self.chat = ChatPanel(ctl)
         self.right = QDockWidget("Chat")
+        self.right.setObjectName("chat_dock")
         self.right.setWidget(self.chat)
         self.right.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.right)
-        self.resizeDocks([self.left, self.right], [260, 560], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.left, self.right], [260, 760], Qt.Orientation.Horizontal)
 
         self._build_activity_bar()
         self._build_toolbar()
@@ -97,6 +99,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.runner_label)
 
         self._build_tray()
+        settings.restore_layout(self)  # panel sizes as the user left them
         self.tree_timer = QTimer(self)
         self.tree_timer.setSingleShot(True)
         self.tree_timer.setInterval(400)
@@ -134,6 +137,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Session")
+        tb.setObjectName("session_bar")
         tb.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
         self.title_label = QLabel()
@@ -388,6 +392,7 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
+        settings.save_layout(self)
         if not self.quitting and self.ctl.runner and self.tray.isVisible():
             # keep the runner alive in the tray so models can keep working on this PC
             self.hide()

@@ -83,10 +83,12 @@ async def online_clis(db: AsyncSession) -> set[str]:
     return drivers
 
 
-async def cli_model_list(db: AsyncSession, ep: Endpoint) -> list[dict[str, Any]] | None:
-    """Cursor's model families, asked from a connected runner that has the CLI (cached for 30 minutes)."""
+async def cli_model_list(db: AsyncSession, ep: Endpoint) -> tuple[list[dict[str, Any]] | None, str]:
+    """Cursor's model families, asked from a connected runner that has the CLI (cached for 30 minutes), or None and
+    why not (shown on the endpoint)."""
     from app.runners.hub import RunnerError, RunnerOffline, hub
 
+    problem = ""
     key = crypto.decrypt(ep.api_key_enc) or ""
     for r in (await db.execute(select(Runner))).scalars():
         info = (r.clis or {}).get(ep.driver or "")
@@ -95,27 +97,33 @@ async def cli_model_list(db: AsyncSession, ep: Endpoint) -> list[dict[str, Any]]
         cache_key = (r.id, info.get("path"), info.get("version"), hashlib.sha256(key.encode()).hexdigest())
         hit = _cli_lists.get(cache_key)
         if hit and time.monotonic() - hit[0] < CLI_LIST_TTL:
-            return hit[1]
+            return hit[1], ""
         try:
             result = await hub.get(r.id).call("agent_cli.models", {"driver": ep.driver, "env": {"CURSOR_API_KEY": key} if key else {}},
                                               timeout=CHECK_TIMEOUT)
         except (RunnerError, RunnerOffline, TimeoutError) as exc:
             log.warning("could not list %s models on runner %s: %s", ep.driver, r.name, exc)
+            problem = (f"Update the MultiChat app on {r.name}: it can't list Cursor's models yet"
+                       if "unknown method" in str(exc) else f"Couldn't list Cursor's models on {r.name}: {exc}")
             continue
-        found = cursor_models.families(cursor_models.parse_list(result.get("output") or ""))
+        output = result.get("output") or ""
+        found = cursor_models.families(cursor_models.parse_list(output))
         if not found:
             log.warning("no models in %s's model list on runner %s (exit %s): %.300r", ep.driver, r.name,
-                        result.get("exit_code"), result.get("output"))
+                        result.get("exit_code"), output)
+            first = next((ln.strip() for ln in output.splitlines() if ln.strip()), "no output")
+            problem = f"Couldn't read Cursor's model list on {r.name} (exit {result.get('exit_code')}): {first[:200]}"
             continue
         _cli_lists[cache_key] = (time.monotonic(), found)
-        return found
-    return None
+        return found, ""
+    return None, problem
 
 
 async def import_cli_models(db: AsyncSession, ep: Endpoint, models: list[Model]) -> None:
     """One model per Cursor family; effort and context window pick the slug when a turn runs."""
-    found = await cli_model_list(db, ep)
+    found, problem = await cli_model_list(db, ep)
     if found is None:
+        ep.status_detail = problem  # e.g. the runner's app is too old, or the list couldn't be read
         return
     label = CLI_LABELS.get(ep.driver or "", ep.name)
     items = []
@@ -153,6 +161,9 @@ async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str,
                 color=PALETTE[taken % len(PALETTE)],
                 source="catalog",
                 enabled=True,
+                # set now: column defaults only apply at INSERT, and None would read as "no tools" below
+                supports_tools=True,
+                supports_images=True,
             )
             taken += 1
             db.add(m)
@@ -168,18 +179,28 @@ async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str,
         m.display_name = (item.get("name") or m.display_name)[:100]
         m.input_price = float(item.get("input_price", m.input_price or 0) or 0)
         m.output_price = float(item.get("output_price", m.output_price or 0) or 0)
-        m.supports_images = bool(item.get("supports_images", m.supports_images))
-        m.supports_tools = bool(item.get("supports_tools", m.supports_tools))
+        # Vendors that don't say (DeepSeek, OpenAI…): assume yes; fill_missing_prices() then takes OpenRouter's word
+        # for the same model. Recomputed at every check, so a wrong value saved earlier is repaired.
+        m.supports_images = bool(item.get("supports_images", True))
+        m.supports_tools = bool(item.get("supports_tools", True))
     await db.flush()
     return models
 
 
 async def fill_missing_prices(db: AsyncSession, ep: Endpoint, models: list[Model]) -> None:
-    """Vendors like OpenAI don't report prices: take OpenRouter's list price for the same model, and re-price this
-    model's earlier usage that was recorded as $0."""
+    """Vendors like OpenAI and DeepSeek don't report prices or capabilities: take OpenRouter's list price, context
+    length and capabilities (tools, images, effort) for the same model, and re-price this model's earlier usage that
+    was recorded as $0."""
     prefix = pricing.vendor_prefix(ep.kind, ep.base_url)
     if prefix is None:
         return
+    caps = await pricing.openrouter_capabilities()
+    for m in models:
+        known = pricing.lookup(caps, prefix, m.model_name) if m.source == "catalog" else None
+        if known:  # rows from config.yaml / the API keep what was set there
+            m.supports_tools = known.get("tools", m.supports_tools)
+            m.supports_images = known.get("images", m.supports_images)
+            m.supports_effort = m.supports_effort or known.get("effort", False)
     if any(not m.context_length for m in models):
         contexts = await pricing.openrouter_contexts()
         for m in models:

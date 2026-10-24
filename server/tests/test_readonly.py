@@ -5,6 +5,12 @@ import pytest
 from app.agent.readonly import check_command
 
 READ_ONLY = [
+    # reading a GitHub repo: clone into a new folder under the temp dir
+    "git clone --depth 1 https://github.com/magiccpp/multi-chat $env:TEMP\\multi-chat",
+    "git clone https://github.com/x/y /tmp/y",
+    "gh repo clone magiccpp/multi-chat /tmp/mc",
+    "gh api repos/magiccpp/multi-chat/contents/README.md",
+    "git ls-remote https://github.com/magiccpp/multi-chat",
     # PowerShell
     "Get-ChildItem -Recurse -Filter *.py | Select-Object -First 20",
     "Get-Content C:\\src\\app\\config.json",
@@ -154,6 +160,11 @@ READ_ONLY = [
 ]
 
 REFUSED = [
+    "git clone https://github.com/x/y",  # into the current folder
+    "git clone https://github.com/x/y C:\\work\\y",
+    "git clone https://github.com/x/y /tmp/../etc/y",
+    "git clone -u evil https://github.com/x/y /tmp/y",
+    "gh repo clone magiccpp/multi-chat",
     # writes / deletes
     "Remove-Item C:\\temp\\x -Recurse",
     "rm -rf build",

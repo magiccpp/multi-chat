@@ -80,7 +80,9 @@ def system_prompt(ci: ContextInput) -> str:
             "with the read-only tools and, when available, run read-only commands with run_command to check code, "
             "configuration, installed software, services, logs and remote machines (over ssh, docker exec, kubectl "
             "exec). Do not modify anything: commands that write files, install or uninstall software, change settings "
-            "or restart services are refused in PLAN, so put them in your plan for the BUILD phase. Be specific: name "
+            "or restart services are refused in PLAN, so put them in your plan for the BUILD phase. Public GitHub repos "
+            "can be read with web_fetch (https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>, "
+            "https://api.github.com/repos/<owner>/<repo>/contents/<path>). Be specific: name "
             "files, functions, commands and steps. The user will compare the models' answers and pick one model to "
             "build."
         )

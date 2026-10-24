@@ -174,10 +174,10 @@ def test_find_prefers_windows_launchers_and_known_folders(tmp_path, monkeypatch)
     assert cli_agents.find_in(["agent"], [str(a), str(b)], windows=True) == str(a / "agent.cmd")
     assert cli_agents.command(str(a / "agent.ps1"))[:2] == ["powershell.exe", "-NoProfile"]
     assert cli_agents.command(str(a / "agent.cmd")) == [str(a / "agent.cmd")]
-    # Linux: executable files only
-    assert cli_agents.find_in(["agent"], [str(a)], windows=False) is None
-    (a / "agent").chmod(0o755)
-    assert cli_agents.find_in(["agent"], [str(a)], windows=False) == str(a / "agent")
+    if sys.platform != "win32":  # Linux / macOS: executable files only (Windows has no execute bit)
+        assert cli_agents.find_in(["agent"], [str(a)], windows=False) is None
+        (a / "agent").chmod(0o755)
+        assert cli_agents.find_in(["agent"], [str(a)], windows=False) == str(a / "agent")
     # a folder from the installers' list is searched even when PATH doesn't have it
     monkeypatch.setenv("PATH", str(b))
     monkeypatch.setattr(cli_agents, "known_dirs", lambda: [str(a)])

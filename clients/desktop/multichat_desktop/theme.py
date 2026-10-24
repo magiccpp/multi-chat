@@ -54,6 +54,12 @@ def apply(app: QApplication) -> None:
         QToolBar#activity {{ background: {c['panel2']}; }}
         QToolBar#activity QToolButton {{ padding: 8px 6px; border-radius: 6px; font-size: 11px; }}
         QToolBar#activity QToolButton:checked {{ background: {c['bg']}; border-left: 3px solid {c['accent']}; }}
+        QMainWindow::separator {{ background: {c['border']}; width: 6px; height: 6px; }}
+        QMainWindow::separator:hover {{ background: {c['accent']}; }}
+        QSplitter::handle {{ background: {c['border']}; }}
+        QSplitter::handle:hover {{ background: {c['accent']}; }}
+        QSplitter::handle:horizontal {{ width: 6px; }}
+        QSplitter::handle:vertical {{ height: 6px; }}
         QDockWidget::title {{ padding: 6px; background: {c['panel2']}; }}
         QStatusBar {{ background: {c['panel']}; border-top: 1px solid {c['border']}; }}
         QFrame#card {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 8px; }}

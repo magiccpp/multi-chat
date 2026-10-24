@@ -263,6 +263,25 @@ GIT_READ = {
 }
 
 
+TEMP_DIRS = re.compile(
+    r"^(\$env:(temp|tmp)|%(temp|tmp)%|\$\{?tmpdir\}?|/tmp|/var/tmp|~/appdata/local/temp|\$home/appdata/local/temp|"
+    r"\$env:localappdata/temp|\$env:userprofile/appdata/local/temp|[a-z]:/users/[^/]+/appdata/local/temp)/[^/]")
+
+
+def in_temp(path: str) -> bool:
+    """A folder under the system temp dir (cloning there reads a repo without touching the user's folders)."""
+    p = path.strip("'\"").replace("\\", "/").lower()
+    return bool(TEMP_DIRS.match(p)) and ".." not in p.split("/")
+
+
+def _clone(target: str | None, args: list[str]) -> Verdict:
+    if _has(args, "-u", "--upload-pack", "--template", "-c", "--config", "--separate-git-dir"):
+        return no("git clone options that run programs or change configuration")
+    if not target or not in_temp(target):
+        return no("clone only into a new folder under the temp dir in PLAN, e.g. $env:TEMP\\repo or /tmp/repo")
+    return OK
+
+
 def _git(args: list[str]) -> Verdict:
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -275,6 +294,10 @@ def _git(args: list[str]) -> Verdict:
     if i >= len(args):
         return OK
     sub, rest = args[i].lower(), args[i + 1 :]
+    if sub == "clone":
+        pos = _positionals(rest, {"--depth", "-b", "--branch", "-o", "--origin", "--filter", "--reference", "-j", "--jobs",
+                                  "--shallow-since", "--shallow-exclude"})
+        return _clone(pos[1] if len(pos) > 1 else None, rest)
     if sub not in GIT_READ:
         return no(f"git {sub} changes the repository (or isn't known to be read-only)")
     if _has(rest, "--output", "-o") and sub in ("log", "diff", "show", "format-patch"):
@@ -565,6 +588,8 @@ def _cloud_verbs(name: str, ok_last: set[str], ok_prefixes: tuple[str, ...]) -> 
 def _gh(args: list[str]) -> Verdict:
     pos = [p.lower() for p in _positionals(args, {"-R", "--repo", "-L", "--limit", "-q", "--jq", "-t", "--template",
                                                    "-s", "--state", "--json", "-H", "--header"})]
+    if pos[:2] == ["repo", "clone"]:
+        return _clone(pos[3] if len(pos) > 3 else None, args[args.index("--") + 1:] if "--" in args else [])
     if pos[:1] == ["api"]:
         if _has(args, "-f", "-F", "--field", "--raw-field", "--input"):
             return no("gh api with fields sends data")

@@ -207,3 +207,15 @@ async def test_cli_installed_while_the_runner_runs(server, client, tmp_path, mon
     assert "cursor" in row["clis"] and eps[ep["id"]]["status"] == "ok"
     await r.stop()
     task.cancel()
+
+
+async def test_cursor_list_problems_show_on_the_endpoint(client, cli_env, monkeypatch):
+    from app import availability
+
+    _, ids, _, log = cli_env
+    ep_id = next(m["endpoint_id"] for m in (await client.get("/api/models")).json() if m["id"] == ids["cursor"])
+    await client.post(f"/api/endpoints/{ep_id}/check")  # let the refresh from the runner connecting finish first
+    availability._cli_lists.clear()
+    monkeypatch.setenv("FAKE_CURSOR_LIST", "garbage")  # the fake CLI prints something unreadable
+    status = (await client.post(f"/api/endpoints/{ep_id}/check")).json()
+    assert status["status"] == "ok" and "Couldn't read Cursor's model list" in status["detail"], status

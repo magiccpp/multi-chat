@@ -88,7 +88,9 @@ RUN_COMMAND_READ_ONLY = ToolSpec(
     "PLAN phase: run a READ-ONLY shell command (time limit about 2 minutes) in the workspace root (non-interactive; stdin is closed) to inspect "
     "code, configuration, installed software, services, logs, or another machine (e.g. ssh host \"cat /etc/app.conf\", "
     "docker exec / kubectl exec ... cat). Commands that change anything (writing files, installing, uninstalling, "
-    "restarting services, git commit/push, ...) are refused; describe those for the BUILD phase instead.",
+    "restarting services, git commit/push, ...) are refused; describe those for the BUILD phase instead. To read a "
+    "GitHub repo, use gh api / gh repo view / git ls-remote, or clone it into a new folder under the temp dir "
+    "(git clone --depth 1 <url> $env:TEMP\\name, or /tmp/name) and read it there.",
     RUN_COMMAND.parameters,
 )
 WEB_FETCH = ToolSpec(

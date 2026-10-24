@@ -212,6 +212,27 @@ def price_unknown(st, model_id: int | None) -> bool:  # noqa: ANN001
                 and m.get("endpoint_kind") not in ("mock",) and u.input_tokens + u.output_tokens > 0)
 
 
+def scroll_row() -> tuple[QHBoxLayout, QScrollArea]:
+    """A row of chips that scrolls sideways instead of widening its panel (scroll with the wheel or a thin bar)."""
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    scroll.setMinimumWidth(80)
+    scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+                         "QScrollBar:horizontal { height: 4px; }")
+    inner = QWidget()
+    row = QHBoxLayout(inner)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    scroll.setWidget(inner)
+    scroll.setFixedHeight(30)
+    scroll.sizeHint = inner.sizeHint  # as wide as its chips when there is room
+    return row, scroll
+
+
 class CostBar(QFrame):
     """What this session has cost so far, per model and in total. Click a model to open its tab."""
 
@@ -223,9 +244,31 @@ class CostBar(QFrame):
         super().__init__()
         self.ctl = ctl
         self.setObjectName("costbar")
-        self.row = QHBoxLayout(self)
-        self.row.setContentsMargins(8, 4, 8, 4)
-        self.row.setSpacing(6)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(8, 4, 8, 4)
+        outer.setSpacing(6)
+        title = QLabel("<b>Session cost</b>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        outer.addWidget(title)
+        # the per-model chips scroll sideways, so the chat panel can still be made narrow
+        self.row, scroll = scroll_row()
+        outer.addWidget(scroll, 1)
+        self.total = QLabel()
+        self.total.setTextFormat(Qt.TextFormat.RichText)
+        self.total.setToolTip("Total for this session, all models")
+        outer.addWidget(self.total)
+        context = QToolButton()
+        context.setObjectName("costchip")
+        context.setText("Context…")
+        context.setToolTip("How full each model's context window is; compact now")
+        context.clicked.connect(self.context_clicked.emit)
+        outer.addWidget(context)
+        details = QToolButton()
+        details.setObjectName("costchip")
+        details.setText("Details…")
+        details.setToolTip("Cost per model: replies, input and output tokens, prices, input and output cost, share")
+        details.clicked.connect(self.details_clicked.emit)
+        outer.addWidget(details)
         self.refresh()
 
     def refresh(self) -> None:
@@ -234,9 +277,6 @@ class CostBar(QFrame):
             if item.widget():
                 item.widget().deleteLater()
         st = self.ctl.st
-        title = QLabel("<b>Session cost</b>")
-        title.setTextFormat(Qt.TextFormat.RichText)
-        self.row.addWidget(title)
         ids = [p["model_id"] for p in st.participants]
         ids += [mid for mid in st.usage if mid is not None and mid not in ids]  # models that left keep their cost
         for mid in sorted(ids, key=lambda m: -(st.usage[m].cost if m in st.usage else 0)):
@@ -258,22 +298,7 @@ class CostBar(QFrame):
             chip.clicked.connect(lambda _=False, mid=mid: self.model_clicked.emit(mid))
             self.row.addWidget(chip)
         self.row.addStretch(1)
-        total = QLabel(f"<b>Σ {money(st.total_cost())}</b>")
-        total.setTextFormat(Qt.TextFormat.RichText)
-        total.setToolTip("Total for this session, all models")
-        self.row.addWidget(total)
-        context = QToolButton()
-        context.setObjectName("costchip")
-        context.setText("Context…")
-        context.setToolTip("How full each model's context window is; compact now")
-        context.clicked.connect(self.context_clicked.emit)
-        self.row.addWidget(context)
-        details = QToolButton()
-        details.setObjectName("costchip")
-        details.setText("Details…")
-        details.setToolTip("Cost per model: replies, input and output tokens, prices, input and output cost, share")
-        details.clicked.connect(self.details_clicked.emit)
-        self.row.addWidget(details)
+        self.total.setText(f"<b>Σ {money(st.total_cost())}</b>")
 
 
 class CostDetailsDialog(QDialog):
@@ -547,11 +572,9 @@ class ChatPanel(QWidget):
         self.wait_bar = WaitBar(ctl)
         layout.addWidget(self.wait_bar)
 
-        self.chips_row = QHBoxLayout()
-        self.chips_row.setContentsMargins(8, 0, 8, 0)
-        chips_widget = QWidget()
-        chips_widget.setLayout(self.chips_row)
-        layout.addWidget(chips_widget)
+        self.chips_row, self.chips_widget = scroll_row()
+        self.chips_widget.setContentsMargins(8, 0, 8, 0)
+        layout.addWidget(self.chips_widget)
         self.chips: dict[int, QPushButton] = {}
 
         # attachments waiting to be sent with the next message
@@ -712,7 +735,7 @@ class ChatPanel(QWidget):
 
     def update_controls(self) -> None:
         build = self.ctl.st.session.get("phase") == "build"
-        self.chips_row.parentWidget().setVisible(not build)  # BUILD talks to the builder only
+        self.chips_widget.setVisible(not build)  # BUILD talks to the builder only
         self.stop_btn.setEnabled(self.ctl.st.busy)
         builder = self.ctl.st.session.get("builder_model_id")
         self.composer.setPlaceholderText(

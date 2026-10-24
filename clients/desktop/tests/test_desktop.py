@@ -199,6 +199,8 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
             assert "tok · $" in win.chat.cards[r.id].title.text()
         assert all("$" in win.chat.tabs.tabText(i) for i in range(win.chat.tabs.count()))
         win.grab().save(str(SHOTS / "desktop-plan.png"))
+        # the panels can be made narrow: no row of chips forces a minimum width (the divider would barely move)
+        assert win.right.minimumSizeHint().width() < 480, win.right.minimumSizeHint().width()
         # Details…: per-model breakdown
         win.chat.show_cost_details()
         await until(lambda: getattr(win.chat, "cost_dialog", None) is not None)

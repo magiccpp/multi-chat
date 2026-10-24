@@ -93,3 +93,19 @@ def save_runner(enabled: bool, roots: list[str], name: str, confirm: bool, auto_
     s.setValue("runner/roots", roots)
     s.setValue("runner/name", name)
     s.setValue("runner/confirm", "true" if confirm else "false")
+
+
+def save_layout(window) -> None:  # noqa: ANN001 - QMainWindow
+    """Window size and panel widths, as the user left them."""
+    q = qsettings()
+    q.setValue("window/geometry", window.saveGeometry())
+    q.setValue("window/state", window.saveState())
+
+
+def restore_layout(window) -> None:  # noqa: ANN001 - QMainWindow
+    q = qsettings()
+    geometry, state = q.value("window/geometry"), q.value("window/state")
+    if geometry is not None:
+        window.restoreGeometry(geometry)
+    if state is not None:
+        window.restoreState(state)

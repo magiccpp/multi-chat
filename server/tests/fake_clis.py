@@ -38,6 +38,8 @@ args = sys.argv[1:]
 open(os.environ["FAKE_LOG"], "a").write(json.dumps({"cli": "cursor", "args": args, "key": os.environ.get("CURSOR_API_KEY")}) + "\n")
 if "--version" in args:
     print("2025.10.1"); sys.exit(0)
+if "--list-models" in args and os.environ.get("FAKE_CURSOR_LIST") == "garbage":
+    print("Error: Not logged in. Run 'agent login'."); sys.exit(1)
 if "--list-models" in args:
     print("\x1b[1mAvailable models\x1b[0m\n")
     for line in ["auto - Auto (current)", "gpt-5 - GPT-5", "gpt-5-high - GPT-5 High", "gpt-5-low - GPT-5 Low",

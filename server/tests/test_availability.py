@@ -204,3 +204,31 @@ async def test_listed_models_all_gone_imports_the_vendor_list(client, vendor_url
     assert (await client.post(f"/api/endpoints/{ep['id']}/check")).json()["status"] == "ok"
     models = await models_of(client, ep["id"])
     assert models["good-model"]["available"] and not models["old-name"]["available"]
+
+
+async def test_vendor_without_capabilities_keeps_tools(client, vendor_url, monkeypatch):
+    """DeepSeek / OpenAI list models without capabilities: imported models keep tools (so web_fetch etc. are offered),
+    OpenRouter's entry for the same model fills in images / effort, and a row saved earlier with tools off is repaired."""
+    from sqlalchemy import update
+
+    from app import db as dbmod
+    from app import pricing
+    from app.tables import Model
+
+    async def fake_caps():
+        return {pricing._norm("deepseek/good-model"): {"tools": True, "images": False, "effort": True}}
+
+    monkeypatch.setattr(pricing, "openrouter_capabilities", fake_caps)
+    monkeypatch.setattr(pricing, "VENDORS", [("127.0.0.1", "deepseek/")])  # the fake vendor plays DeepSeek
+    ep = (await client.post("/api/endpoints", json={"name": "vendor-deepseek", "kind": "openai_compatible",
+                                                    "base_url": vendor_url, "api_key": "right-key"})).json()
+    await client.post(f"/api/endpoints/{ep['id']}/check")
+    models = await models_of(client, ep["id"])
+    good, vision = models["good-model"], models["vision-model"]
+    assert good["supports_tools"] and not good["supports_images"] and good["supports_effort"]
+    assert vision["supports_tools"] and vision["supports_images"]  # unknown to OpenRouter: assume yes
+    async with dbmod.sessionmaker()() as db:  # what the bug saved before this fix
+        await db.execute(update(Model).where(Model.id == vision["id"]).values(supports_tools=False))
+        await db.commit()
+    await client.post(f"/api/endpoints/{ep['id']}/check")
+    assert (await models_of(client, ep["id"]))["vision-model"]["supports_tools"]
