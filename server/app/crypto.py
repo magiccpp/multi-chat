@@ -1,5 +1,8 @@
 """Encryption at rest for API keys and SSH secrets."""
 
+import base64
+import binascii
+import hashlib
 from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -20,7 +23,19 @@ def _fernet() -> Fernet:
             key = Fernet.generate_key().decode()
             path.write_text(key)
             path.chmod(0o600)
-    return Fernet(key.encode())
+    return Fernet(fernet_key(key))
+
+
+def fernet_key(secret: str) -> bytes:
+    """Use a real Fernet key as-is; derive one from any other secret (e.g. `openssl rand -hex 32`)."""
+    try:
+        if len(base64.urlsafe_b64decode(secret.encode())) == 32:
+            return secret.encode()
+    except (binascii.Error, ValueError):
+        pass
+    if len(secret) < 16:
+        raise RuntimeError("MULTICHAT_SECRET_KEY is too short; use at least 16 random characters (or leave it empty)")
+    return base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
 
 
 def encrypt(value: str | None) -> str | None:
