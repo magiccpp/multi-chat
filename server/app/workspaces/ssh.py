@@ -248,13 +248,17 @@ class SshWorkspace(Workspace):
         on_line: LineCallback,
         approval: dict[str, Any] | None = None,
     ) -> int:
-        exe = {"claude_code": "claude", "cursor": "cursor-agent", "copilot": "copilot"}[driver]
+        names = {"claude_code": ["claude"], "cursor": ["cursor-agent", "agent"], "copilot": ["copilot"]}[driver]
         if self.powershell:
             sets = "".join(f"$env:{k}={_ps_quote(v)}; " for k, v in env.items())
-            command = sets + "& " + " ".join(_ps_quote(a) for a in [exe, *args])
+            # the first of the names that exists (newer Cursor installs only have `agent`)
+            pick = " ".join(f"if (-not $exe -and (Get-Command {n} -ErrorAction SilentlyContinue)) {{ $exe = '{n}' }};" for n in names)
+            command = f"$exe = $null; {pick} if (-not $exe) {{ $exe = '{names[0]}' }}; " + sets + "& $exe " + " ".join(
+                _ps_quote(a) for a in args)
         else:
             exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
-            command = f"{exports} {shlex.join([exe, *args])}".strip()
+            pick = " || ".join(f"command -v {n}" for n in names) + f" || echo {names[0]}"
+            command = f'{exports} "$({pick})" {shlex.join(args)}'.strip()
         conn = await connect(self.row)
         process = await conn.create_process(self._wrap(command))
         if stdin:

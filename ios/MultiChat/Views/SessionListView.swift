@@ -111,23 +111,24 @@ struct NewSessionSheet: View {
                 if !big.isEmpty {
                     Section {
                         Picker("Context window", selection: $largeContext) {
-                            Text("256K").tag(false)
+                            Text("Smaller").tag(false)
                             Text("Max").tag(true)
                         }
                         .pickerStyle(.segmented)
                         ForEach(big) { m in
-                            LabeledContent(m.displayName, value: largeContext
-                                ? "\(contextLabel(m.contextLength)) (\((m.contextLength ?? 0).formatted()) tokens)" : "256K")
+                            let size = largeContext ? m.contextChoices.last ?? 0 : m.contextChoices.first ?? 0
+                            LabeledContent(m.displayName, value: largeContext ? "\(contextLabel(size)) (\(size.formatted()) tokens)" : contextLabel(size))
                                 .font(.caption)
                         }
                     } footer: {
-                        Text("For models over 512K. Other models use their maximum. Chosen now; it can't be changed later in this session.")
+                        Text("For models over 512K (256K or their maximum) and Cursor models with a long-context version. Other models use their maximum. Chosen now; it can't be changed later in this session.")
                     }
                 }
                 ModelPicker(models: app.models, selected: $selected, query: query)
             }
             .searchable(text: $query, prompt: "Search models")
             .refreshable { await app.checkAvailability() }
+            .task { await app.reloadModels() }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -138,7 +139,7 @@ struct NewSessionSheet: View {
                             let ordered = app.models.map(\.id).filter { selected.contains($0) }
                             var windows: [Int: Int] = [:]
                             for m in app.models where selected.contains(m.id) && m.contextChoices.count > 1 {
-                                windows[m.id] = largeContext ? m.contextChoices[1] : m.contextChoices[0]
+                                windows[m.id] = largeContext ? m.contextChoices.last! : m.contextChoices[0]
                             }
                             let s = await app.newSession(title: title.isEmpty ? "New session" : title, modelIds: ordered,
                                                          contextMode: shared ? "shared" : "isolated", contextWindows: windows)

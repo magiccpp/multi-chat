@@ -13,6 +13,7 @@ from app.agent.approvals import Decision, approvals
 from app.agent.events import bus, sse
 from app.agent.loop import TurnError, participants, turns
 from app.agent.tools import unified_diff
+from app.providers.agent_cli import cursor_models
 from app.db import get_db
 from app.schemas import (
     ApprovalIn,
@@ -59,6 +60,8 @@ async def session_out(db: AsyncSession, s: Session) -> SessionOut:
             context_window=settings[m.id].context_window if m.id in settings else None,
             context_length=m.context_length, effort=settings[m.id].effort if m.id in settings else None,
             supports_effort=m.supports_effort,
+            effort_levels=cursor_models.effort_levels(m.cli_variants),
+            context_choices=cursor_models.context_choices(m.cli_variants),
         )
         for i, (m, e) in enumerate(await participants(db, s.id))
     ]
@@ -75,8 +78,14 @@ async def session_out(db: AsyncSession, s: Session) -> SessionOut:
 def _check_settings(model: Model, context_window: int | None, effort: str | None) -> None:
     if context_window is not None and model.context_length and context_window > model.context_length:
         raise HTTPException(422, f"{model.display_name} has a context window of at most {model.context_length:,} tokens")
+    choices = cursor_models.context_choices(model.cli_variants)
+    if context_window is not None and choices and context_window not in choices:
+        raise HTTPException(422, f"{model.display_name} offers these context windows: {', '.join(f'{c:,}' for c in choices)}")
     if effort is not None and not model.supports_effort:
         raise HTTPException(422, f"{model.display_name} doesn't support a reasoning effort setting")
+    levels = cursor_models.effort_levels(model.cli_variants)
+    if effort is not None and levels and effort not in levels:
+        raise HTTPException(422, f"{model.display_name} offers these effort levels: {', '.join(levels)}")
 
 
 async def _apply_settings(db: AsyncSession, session_id: int, settings: dict[int, ModelSettingsIn]) -> None:

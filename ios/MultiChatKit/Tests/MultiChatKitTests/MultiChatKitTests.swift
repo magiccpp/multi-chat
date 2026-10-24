@@ -134,6 +134,24 @@ final class MultiChatKitTests: XCTestCase {
         XCTAssertEqual(st.name(7), "Alpha")
     }
 
+    func testCursorFamilyChoices() throws {
+        let m = try decode(ModelInfo.self, """
+        {"id": 9, "endpoint_id": 2, "endpoint_name": "cursor", "endpoint_kind": "agent_cli", "model_name": "claude-opus-4-8",
+         "display_name": "Cursor · Opus 4.8", "color": "#111827", "input_price": 0, "output_price": 0, "enabled": true,
+         "supports_tools": true, "source": "catalog", "context_length": 1000000, "supports_effort": true,
+         "effort_levels": ["medium", "high"], "context_choices": [200000, 1000000]}
+        """)
+        XCTAssertEqual(m.contextChoices, [200_000, 1_000_000], "Cursor's own sizes, not 256K / max")
+        XCTAssertEqual(m.effortLevels, ["medium", "high"])
+        let p = try decode(Participant.self, """
+        {"model_id": 9, "display_name": "Cursor · Opus 4.8", "color": "#111827", "endpoint_kind": "agent_cli", "position": 0,
+         "supports_effort": true, "effort_levels": ["medium", "high"], "context_choices": [200000, 1000000]}
+        """)
+        XCTAssertEqual(p.efforts, ["medium", "high"])
+        let plain = try decode(Participant.self, #"{"model_id": 1, "display_name": "A", "color": "#000", "endpoint_kind": "mock", "position": 0}"#)
+        XCTAssertEqual(plain.efforts, Effort.levels)
+    }
+
     func testWaitTips() throws {
         var st = SessionState(session: try decode(Session.self, sessionJSON), messages: [], usage: [],
                               models: try decode([ModelInfo].self, modelsJSON))

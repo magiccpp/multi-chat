@@ -54,7 +54,8 @@ async def cli_env(server, client, tmp_path, monkeypatch):
 
 
 def calls(log, cli):
-    return [json.loads(x)["args"] for x in log.read_text().splitlines() if json.loads(x)["cli"] == cli and "--version" not in json.loads(x)["args"]]
+    return [json.loads(x)["args"] for x in log.read_text().splitlines()
+            if json.loads(x)["cli"] == cli and not {"--version", "--list-models"} & set(json.loads(x)["args"])]
 
 
 async def test_agent_clis_plan_build_resume(client, cli_env):
@@ -69,6 +70,7 @@ async def test_agent_clis_plan_build_resume(client, cli_env):
     assert claude_args[0] == "--bare" and "--resume" not in claude_args
     assert claude_args[claude_args.index("--permission-mode") + 1] == "plan"
     assert "--force" not in calls(log, "cursor")[0]
+    assert "--trust" in calls(log, "cursor")[0]  # headless runs can't answer Cursor's trust prompt
     assert calls(log, "copilot")[0][-4:] == ["--deny-tool", "write", "--deny-tool", "shell"]
     assert not (root / "claude_edit.txt").exists() and not (root / "cursor_edit.txt").exists()
 
@@ -133,3 +135,75 @@ def test_claude_flags_without_bridge():
     assert inv.notices and not inv.use_bridge
     inv = ClaudeCodeDriver().build(CliRun(phase="build", approve_commands="auto", bridge_available=False, **base))
     assert "Bash" in inv.args
+
+
+async def test_cursor_model_families_effort_and_context(client, cli_env):
+    first, ids, root, log = cli_env
+    ep_id = next(m["endpoint_id"] for m in (await client.get("/api/models")).json() if m["id"] == ids["cursor"])
+    await client.post(f"/api/endpoints/{ep_id}/check")
+    by = {m["model_name"]: m for m in (await client.get("/api/models")).json() if m["endpoint_id"] == ep_id}
+    assert {"default", "auto", "gpt-5", "claude-opus-4-8"} <= set(by) and "gpt-5-high" not in by  # one model per family
+    listed = [json.loads(x) for x in log.read_text().splitlines() if "--list-models" in json.loads(x)["args"]]
+    assert listed and listed[-1]["key"] == "cur-key"  # asked with the endpoint's key
+    opus, gpt = by["claude-opus-4-8"], by["gpt-5"]
+    assert opus["display_name"] == "Cursor · Opus 4.8" and opus["available"]
+    assert opus["effort_levels"] == ["medium", "high"] and opus["context_choices"] == [200_000, 1_000_000]
+    assert gpt["effort_levels"] == ["low", "medium", "high"] and gpt["context_choices"] is None
+    assert by["auto"]["effort_levels"] is None
+
+    s = (await client.post("/api/sessions", json={
+        "title": "cursor-variants", "model_ids": [opus["id"]],
+        "workspace": {"kind": "runner", "runner_id": first["runner_id"], "path": str(root)},
+        "model_settings": {str(opus["id"]): {"context_window": 1_000_000, "effort": "high"}},
+    })).json()
+    p = s["participants"][0]
+    assert p["effort_levels"] == ["medium", "high"] and p["context_choices"] == [200_000, 1_000_000]
+    events = await chat(client, s["id"], "Look at main.py")
+    assert any(e["type"] == "status" and e["state"] == "starting" and "claude-opus-4-8-1m-thinking-high" in e["text"] for e in events)
+    args = calls(log, "cursor")[-1]
+    assert args[args.index("--model") + 1] == "claude-opus-4-8-1m-thinking-high"
+
+    # effort changes any time and picks another slug; Cursor's own choices only
+    assert (await client.patch(f"/api/sessions/{s['id']}/models/{opus['id']}", json={"effort": "medium"})).status_code == 200
+    await chat(client, s["id"], "Again")
+    args = calls(log, "cursor")[-1]
+    assert args[args.index("--model") + 1] == "claude-opus-4-8-1m"
+    assert (await client.patch(f"/api/sessions/{s['id']}/models/{opus['id']}", json={"effort": "low"})).status_code == 422
+    assert (await client.patch(f"/api/sessions/{s['id']}/models/{opus['id']}", json={"context_window": 200_000})).status_code == 409
+
+
+async def test_cli_installed_while_the_runner_runs(server, client, tmp_path, monkeypatch):
+    from multichat_client.runner import cli_agents
+
+    bin_dir = tmp_path / "later-bin"
+    bin_dir.mkdir()
+    monkeypatch.setattr(cli_agents, "known_dirs", lambda: [])
+    monkeypatch.setenv("PATH", os.path.dirname(sys.executable))  # no agent CLIs yet
+    monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.jsonl"))
+    ep = (await client.post("/api/endpoints", json={"name": f"cursor-late-{tmp_path.name}", "kind": "agent_cli",
+                                                    "driver": "cursor"})).json()
+    root = tmp_path / "proj"
+    root.mkdir()
+    r = Runner(server, TOKEN, [str(root)], name=f"late-{tmp_path.name}")
+    seen: list[dict] = []
+    r.on_clis = seen.append
+    task = asyncio.create_task(r.run_forever())
+    for _ in range(100):
+        if r.runner_id:
+            break
+        await asyncio.sleep(0.05)
+    assert "cursor" not in r.clis
+
+    fake_clis.install(bin_dir, sys.executable)  # installed now; the app keeps running
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    found = await r.redetect()
+    assert "cursor" in found and seen[-1] == found
+    for _ in range(100):
+        row = next(x for x in (await client.get("/api/runners")).json() if x["id"] == r.runner_id)
+        eps = {e["id"]: e for e in (await client.get("/api/endpoints")).json()}
+        if "cursor" in (row.get("clis") or {}) and eps[ep["id"]]["status"] == "ok":
+            break
+        await asyncio.sleep(0.05)
+    assert "cursor" in row["clis"] and eps[ep["id"]]["status"] == "ok"
+    await r.stop()
+    task.cancel()

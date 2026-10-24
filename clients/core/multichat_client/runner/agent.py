@@ -67,6 +67,7 @@ class Runner:
         self._send_lock = asyncio.Lock()
         self._stopping = False
         self.clis: dict[str, dict] = {}
+        self.on_clis: Callable[[dict[str, dict]], None] = lambda clis: None  # the apps show what was found
 
     def hello(self) -> dict[str, Any]:
         return {
@@ -80,10 +81,30 @@ class Runner:
             "version": __version__,
         }
 
+    REDETECT_EVERY = 120.0  # seconds: a CLI installed while the app runs shows up without a restart
+
+    async def redetect(self) -> dict[str, dict]:
+        """Look for agent CLIs again; tell the server when something changed."""
+        clis = await asyncio.to_thread(cli_agents.detect)
+        if clis != self.clis:
+            self.clis = clis
+            await self._send({"type": "clis", "clis": clis})
+        self.on_clis(clis)
+        return clis
+
+    async def _redetect_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.REDETECT_EVERY)
+            try:
+                await self.redetect()
+            except Exception:  # noqa: BLE001 - never let a failed check stop the runner
+                log.exception("agent CLI re-check failed")
+
     async def run_forever(self) -> None:
-        self.clis = await asyncio.to_thread(cli_agents.detect)
         delay = 1.0
         while not self._stopping:
+            self.clis = await asyncio.to_thread(cli_agents.detect)
+            self.on_clis(self.clis)
             self.on_status("connecting", self.url)
             try:
                 async with connect(
@@ -132,6 +153,7 @@ class Runner:
         welcome = json.loads(await ws.recv())
         self.runner_id = welcome.get("runner_id")
         self.on_status("online", f"connected as {self.name}")
+        recheck = asyncio.create_task(self._redetect_loop())
         try:
             async for raw in ws:
                 msg = json.loads(raw)
@@ -146,6 +168,7 @@ class Runner:
                 elif mtype == "ping":
                     await self._send({"type": "pong"})
         finally:
+            recheck.cancel()
             for task in list(self._tasks.values()):
                 task.cancel()
             self._ws = None
@@ -219,6 +242,8 @@ class Runner:
                 token=self.token,
             )
             return {"exit_code": code}
+        if method == "agent_cli.models":
+            return await cli_agents.list_models(p["driver"], dict(p.get("env") or {}), Path.home())
         raise ValueError(f"unknown method {method}")
 
 

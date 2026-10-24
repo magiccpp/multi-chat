@@ -194,3 +194,13 @@ def test_price_lookup_matches_vendor_ids():
     assert pricing.vendor_prefix("openai_compatible", "https://api.openai.com/v1") == "openai/"
     assert pricing.vendor_prefix("anthropic", None) == "anthropic/"
     assert pricing.vendor_prefix("openai_compatible", "https://openrouter.ai/api/v1") is None
+
+
+async def test_listed_models_all_gone_imports_the_vendor_list(client, vendor_url):
+    # e.g. config.yaml still lists a model the vendor renamed: offer what the vendor has instead of a grey endpoint
+    ep = (await client.post("/api/endpoints", json={"name": "vendor-renamed", "kind": "openai_compatible",
+                                                    "base_url": vendor_url, "api_key": "right-key"})).json()
+    await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": "old-name", "display_name": "Old"})
+    assert (await client.post(f"/api/endpoints/{ep['id']}/check")).json()["status"] == "ok"
+    models = await models_of(client, ep["id"])
+    assert models["good-model"]["available"] and not models["old-name"]["available"]

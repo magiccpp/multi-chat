@@ -21,10 +21,14 @@ public struct ModelInfo: Codable, Hashable, Identifiable, Sendable {
     public var supportsImages: Bool = true
     public var contextLength: Int?
     public var supportsEffort: Bool = false
+    /// A model's own fixed choices (Cursor families: their effort levels and standard / long-context windows).
+    public var effortLevels: [String]?
+    public var fixedContextChoices: [Int]?
 
-    /// Context windows to choose from when a session starts: 256K or the model's maximum when that is over 512K;
-    /// otherwise just the maximum.
+    /// Context windows to choose from when a session starts: the model's own set if it has one; else 256K or the
+    /// model's maximum when that is over 512K; otherwise just the maximum.
     public var contextChoices: [Int] {
+        if let fixed = fixedContextChoices, !fixed.isEmpty { return fixed }
         guard let max = contextLength, max > 0 else { return [] }
         return max > 512_000 ? [256_000, max] : [max]
     }
@@ -33,7 +37,9 @@ public struct ModelInfo: Codable, Hashable, Identifiable, Sendable {
 extension ModelInfo {
     enum CodingKeys: String, CodingKey {
         case id, endpointId, endpointName, endpointKind, modelName, displayName, color, inputPrice, outputPrice, enabled,
-             supportsTools, source, available, availabilityDetail, supportsImages, contextLength, supportsEffort
+             supportsTools, source, available, availabilityDetail, supportsImages, contextLength, supportsEffort,
+             effortLevels
+        case fixedContextChoices = "contextChoices"
     }
 
     public init(from decoder: Decoder) throws {
@@ -55,6 +61,8 @@ extension ModelInfo {
         supportsImages = try c.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? true
         contextLength = try c.decodeIfPresent(Int.self, forKey: .contextLength)
         supportsEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsEffort) ?? false
+        effortLevels = try c.decodeIfPresent([String].self, forKey: .effortLevels)
+        fixedContextChoices = try c.decodeIfPresent([Int].self, forKey: .fixedContextChoices)
     }
 }
 
@@ -103,6 +111,12 @@ public struct Participant: Codable, Hashable, Sendable {
     /// low | medium | high | xhigh | max; nil = the model's default. Can change any time.
     public var effort: String?
     public var supportsEffort: Bool?
+    /// Only for models with their own fixed set (Cursor families); nil = all levels.
+    public var effortLevels: [String]?
+    public var contextChoices: [Int]?
+
+    /// Effort levels this participant offers.
+    public var efforts: [String] { Effort.levels.filter { (effortLevels ?? Effort.levels).contains($0) } }
 }
 
 public enum Effort {

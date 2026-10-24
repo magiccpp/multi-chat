@@ -20,9 +20,9 @@ from textual.widgets import Static, Tab, Tabs
 from multichat_client.client import ApiError, MultiChatClient
 from multichat_client.config import ClientConfig
 from multichat_client.runner.agent import Runner
-from multichat_client.state import EFFORTS, SessionState, context_choices, window_label
+from multichat_client.state import SessionState, context_choices, effort_choices, pick_window, window_label
 from multichat_tui import commands as cmds
-from multichat_tui.render import context_table, cost_table, money, tokens, usage_text, wait_lines
+from multichat_tui.render import context_table, cost_table, money, runner_text, tokens, usage_text, wait_lines
 from multichat_tui.screens import (
     ApprovalScreen,
     ModelsScreen,
@@ -773,6 +773,13 @@ class MultiChatApp(App):
                 self.push_screen(TextScreen("Statistics — price and performance per model", stats_body(await c.stats(), compact=self.size.width < 150)))
             elif name == "cost":
                 self.push_screen(TextScreen("Session cost", cost_table(await c.usage(sid))))
+            elif name == "runner":
+                if self.runner is None:
+                    self.notify("the runner is off (started without it: --no-runner)", severity="warning")
+                else:
+                    if args[:1] == ["detect"]:
+                        await self.runner.redetect()
+                    self.push_screen(TextScreen("Runner on this machine", runner_text(self.runner, self.runner_state)))
             elif name == "endpoints":
                 if args[:1] == ["check"]:
                     self.notify("checking keys and model lists…")
@@ -799,22 +806,24 @@ class MultiChatApp(App):
             mid = p.get("model_id", p.get("id"))
             part = self.st.participant(mid) or {}
             if name == "effort":
-                if value not in EFFORTS + ["default"]:
-                    self.notify("effort: low, medium, high, xhigh, max or default", severity="warning")
+                levels = effort_choices(part)
+                if value not in levels + ["default"]:
+                    self.notify(f"{part.get('display_name', mid)} effort: {', '.join(levels)} or default", severity="warning")
                     return
                 if not part.get("supports_effort"):
                     self.notify(f"{part.get('display_name', mid)} has no effort setting", severity="warning")
                     continue
                 self.st.session = await self.client.update_model_settings(self.st.session_id, mid, effort=None if value == "default" else value)
             else:
-                choices = context_choices(part.get("context_length"))
-                wanted = {"256k": 256_000, "max": choices[-1] if choices else None}.get(value)
+                choices = context_choices(part.get("context_length"), part.get("context_choices"))
+                wanted = pick_window(value, choices)
                 if len(choices) < 2 or wanted is None:
                     self.notify(f"{part.get('display_name', mid)}: " + (
                         f"uses its maximum, {window_label(choices[0])} ({choices[0]:,} tokens); a choice exists only above 512K"
-                        if choices else "context window unknown") if choices or wanted else "context: 256k or max", severity="warning")
+                        if len(choices) == 1 else "context window unknown" if not choices
+                        else "choose " + " or ".join(window_label(c).lower() for c in choices) + " (or max)"), severity="warning")
                     continue
-                self.st.session = await self.client.update_model_settings(self.st.session_id, mid, context_window=min(wanted, choices[-1]))
+                self.st.session = await self.client.update_model_settings(self.st.session_id, mid, context_window=wanted)
         self.update_sidebar()
         self.rebuild_tabs()
 

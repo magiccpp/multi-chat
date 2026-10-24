@@ -33,6 +33,7 @@ struct ModelsSheet: View {
                     }
                 }
                 .onAppear { selected = Set(model.state.participants.map(\.modelId)) }
+                .task { await app.reloadModels() }
         }
     }
 }

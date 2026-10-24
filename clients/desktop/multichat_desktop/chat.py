@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from multichat_client.state import EFFORT_LABELS, EFFORTS, MessageView, elapsed, window_label
+from multichat_client.state import EFFORT_LABELS, MessageView, effort_choices, elapsed, window_label
 from multichat_desktop import attachments as att_mod
 from multichat_desktop.attachments import AttachmentView, PendingAttachment, PendingChip
 from multichat_desktop.controller import Controller
@@ -634,7 +634,7 @@ class ChatPanel(QWidget):
         menu.addAction(f"Context window: {window_label(p.get('context_window') or p.get('context_length'))} (fixed)").setEnabled(False)
         effort_menu = menu.addMenu("Effort")
         effort_menu.setEnabled(bool(p.get("supports_effort")))
-        for label, value in [("Default", None)] + [(EFFORT_LABELS[e], e) for e in EFFORTS]:
+        for label, value in [("Default", None)] + [(EFFORT_LABELS[e], e) for e in effort_choices(p)]:
             act = effort_menu.addAction(label)
             act.setCheckable(True)
             act.setChecked(p.get("effort") == value)

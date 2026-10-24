@@ -124,7 +124,8 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
         row.source = "config"
         row.enabled = ep.get("enabled", True)
         # OpenRouter imports its whole catalog unless told otherwise; see also availability.import_patterns()
-        row.auto_models = ep.get("auto_models", is_openrouter(row.base_url))
+        # (and Cursor its model list, asked from a runner that has the CLI)
+        row.auto_models = ep.get("auto_models", is_openrouter(row.base_url) or row.driver == "cursor")
         await db.flush()
         counts["endpoints"] += 1
 

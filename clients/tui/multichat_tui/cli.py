@@ -27,7 +27,7 @@ from rich.console import Console
 
 from multichat_client import config as cfgmod
 from multichat_client.client import ApiError, MultiChatClient
-from multichat_client.state import MessageView, SessionState, context_choices
+from multichat_client.state import EFFORTS, MessageView, SessionState, context_choices, effort_choices
 from multichat_tui.commands import match_model
 from multichat_tui.render import message_body, message_header, money, stats_table, usage_text
 
@@ -76,8 +76,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
             for m in [x for x in models if x["id"] in ids]:
                 cfg = {}
                 if args.effort and m.get("supports_effort"):
-                    cfg["effort"] = args.effort
-                choices = context_choices(m.get("context_length"))
+                    levels = effort_choices(m)  # Cursor models: the nearest level they offer
+                    cfg["effort"] = args.effort if args.effort in levels else min(
+                        levels, key=lambda e: abs(EFFORTS.index(e) - EFFORTS.index(args.effort)))
+                choices = context_choices(m.get("context_length"), m.get("context_choices"))
                 if args.context and len(choices) > 1:
                     cfg["context_window"] = choices[0] if args.context == "256k" else choices[-1]
                 if cfg:

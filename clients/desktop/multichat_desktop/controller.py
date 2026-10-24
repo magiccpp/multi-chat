@@ -24,6 +24,7 @@ class Controller(QObject):
     models_changed = Signal()
     error = Signal(str)
     notice = Signal(str)  # plain status-bar messages
+    clis_changed = Signal(object)  # agent CLIs the runner found on this PC: {driver: {path, version}}
 
     def __init__(self, client: MultiChatClient) -> None:
         super().__init__()
@@ -202,6 +203,7 @@ class Controller(QObject):
             self.client.url, self.client.token, roots, name=name,
             confirm_command=confirm_on_gui if confirm else None, on_status=status,
         )
+        runner.on_clis = self.clis_changed.emit  # called on the runner thread; Qt queues it to the GUI
         started = threading.Event()
 
         def run() -> None:
@@ -220,6 +222,14 @@ class Controller(QObject):
         self.runner_thread = threading.Thread(target=run, name="multichat-runner", daemon=True)
         self.runner_thread.start()
         started.wait(5)
+
+    def redetect_clis(self) -> bool:
+        """Look for Claude Code / Cursor / Copilot again (e.g. right after installing one); False if the runner is off."""
+        runner, loop = self.runner, self.runner_loop
+        if runner is None or loop is None or loop.is_closed():
+            return False
+        asyncio.run_coroutine_threadsafe(runner.redetect(), loop)
+        return True
 
     def stop_runner(self) -> None:
         runner, loop, thread = self.runner, self.runner_loop, self.runner_thread

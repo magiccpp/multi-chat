@@ -116,6 +116,13 @@ async def test_tui_plan_vote_build(server, client, tmp_path):
         await pilot.press("escape")
         await pilot.pause(0.1)
 
+        await send(pilot, app, "/runner detect")
+        await until(pilot, lambda: isinstance(app.screen, TextScreen))
+        await pilot.pause(0.2)
+        assert "Agent CLIs" in app.screen.body.plain and "Cursor" in app.screen.body.plain
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+
         await send(pilot, app, "/stats")
         await until(pilot, lambda: isinstance(app.screen, TextScreen))
         await pilot.pause(0.2)

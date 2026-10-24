@@ -122,7 +122,7 @@ struct SessionView: View {
                     Picker("\(p.displayName) · \(contextLabel(p.contextWindow ?? p.contextLength))",
                            selection: Binding(get: { p.effort ?? "" }, set: { model.setEffort(p.modelId, $0.isEmpty ? nil : $0) })) {
                         Text("Default").tag("")
-                        ForEach(Effort.levels, id: \.self) { Text(Effort.label($0)).tag($0) }
+                        ForEach(p.efforts, id: \.self) { Text(Effort.label($0)).tag($0) }
                     }
                 }
             }

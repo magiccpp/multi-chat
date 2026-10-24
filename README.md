@@ -65,12 +65,20 @@ Keys come from `.env` via `${NAME}`. They're stored encrypted in Postgres (`MULT
 
 ### Claude Code, Cursor and GitHub Copilot
 
-These join a session like any model, but they run their own agent loop on the machine that holds the folder: your PC (runner) or an SSH host. The CLI must be installed there.
+These join a session like any model, but they run their own agent loop on the machine that holds the folder: your PC (the runner in the desktop app or TUI) or an SSH host. Install the CLI **there, not on the server**; put the keys in the server's `.env`.
+
+| Install on Windows (PowerShell) | Install on Linux / macOS |
+| --- | --- |
+| Cursor: `irm 'https://cursor.com/install?win32=true' \| iex` | `curl https://cursor.com/install -fsS \| bash` |
+| Claude Code: `irm https://claude.ai/install.ps1 \| iex` | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| GitHub Copilot: `npm install -g @github/copilot` | same |
+
+The runner finds them the way a new terminal would (also `agent.cmd` / `.ps1` launchers and installs made while the app was running) and checks again every 2 minutes; **Runner → Detect again** (`/runner detect` in the TUI) looks right away and shows what was found. Cursor's models come from the CLI itself (`agent --list-models`): one model per family, and the **Effort** and **Context window** settings pick the variant Cursor offers (e.g. `…-thinking-high`, `…-1m`), just as in Cursor.
 
 | | Command used | Credentials | PLAN | BUILD |
 | --- | --- | --- | --- | --- |
 | Claude Code | `claude -p --output-format stream-json` (`--resume` keeps its context) | `ANTHROPIC_API_KEY` from the endpoint (`--bare` mode) | `--permission-mode plan` | approvals go through a bridge into MultiChat's Approve/Reject (runner only) |
-| Cursor | `cursor-agent -p --output-format stream-json` | `CURSOR_API_KEY` from your Cursor dashboard | proposes only | `--force` (auto-applies; use Revert) |
+| Cursor | `cursor-agent -p --output-format stream-json --trust [--model <variant>]` | `CURSOR_API_KEY` from your Cursor dashboard | proposes only | `--force` (auto-applies; use Revert) |
 | GitHub Copilot | `copilot -p … -s` | `GH_TOKEN`, or `copilot login` on that machine | write and shell tools denied | `--allow-all-tools` (auto-applies; use Revert) |
 
 Anthropic does not allow third-party apps to offer claude.ai (subscription) login, so MultiChat has no "Sign in with Claude". Use an API key for the Claude Code endpoint (or leave it empty and the CLI uses whatever sign-in that machine already has). For GitHub's API models, use the **GitHub Models** preset (`https://models.github.ai/inference`, a token with `models:read`).
@@ -97,7 +105,7 @@ multichat login                   # change server/token
 
 **TUI keys**: `enter` sends (`alt+enter` / `ctrl+j` for a new line) · `tab` / `shift+tab` switch between All and per-model tabs · `alt+↑` focuses replies, then `↑`/`↓` move · `+` `-` `0` vote · `b` pick as builder · `enter` expand tool output · `y` copy · `1..9` quick-vote after a PLAN turn · `ctrl+b` sidebar · `ctrl+p` command palette · `ctrl+a` pending approval.
 
-**Slash commands**: `/new` or `/clear` (ignored while the current session is still empty), `/resume`, `/attach <file>…|clear`, `/effort <model|all> <level|default>`, `/window <model|all> 256k|max`, `/context`, `/compact`, `/memory [clear]` (and `# text` to remember), `/cost`, `/sessions`, `/models`, `/plan`, `/build [model]`, `/builder <model>`, `/mode shared|isolated`, `/to <models|all>`, `/folder none|here|<path>|ssh:<conn>:<path>|runner:<name>:<path>`, `/approve edits|cmds auto|ask`, `/vote <#n|up|down> [up|down|clear]`, `/quickvote on|off`, `/revert`, `/stop`, `/stats`, `/endpoints [check]`, `/rename`, `/help`. In `/models`, type to filter; unavailable models are greyed out.
+**Slash commands**: `/new` or `/clear` (ignored while the current session is still empty), `/resume`, `/attach <file>…|clear`, `/effort <model|all> <level|default>`, `/window <model|all> 256k|max|<size>`, `/runner [detect]`, `/context`, `/compact`, `/memory [clear]` (and `# text` to remember), `/cost`, `/sessions`, `/models`, `/plan`, `/build [model]`, `/builder <model>`, `/mode shared|isolated`, `/to <models|all>`, `/folder none|here|<path>|ssh:<conn>:<path>|runner:<name>:<path>`, `/approve edits|cmds auto|ask`, `/vote <#n|up|down> [up|down|clear]`, `/quickvote on|off`, `/revert`, `/stop`, `/stats`, `/endpoints [check]`, `/rename`, `/help`. In `/models`, type to filter; unavailable models are greyed out.
 
 ## 3. Windows: desktop app
 

@@ -69,6 +69,8 @@ class Model(Base):
     # From the vendor catalogs (OpenRouter, Anthropic) where known.
     context_length: Mapped[int | None] = mapped_column(Integer)  # max input tokens
     supports_effort: Mapped[bool] = mapped_column(Boolean, default=False)  # reasoning effort can be set
+    # Agent-CLI model families (Cursor): {"variants": [{slug, effort, thinking, fast, context}], "default_context"}
+    cli_variants: Mapped[dict | None] = mapped_column(JsonType, nullable=True)
     source: Mapped[str] = mapped_column(String(16), default="api")  # config | api | catalog
     # Set by the endpoint check: can this model be used right now, and if not, why.
     available: Mapped[bool] = mapped_column(Boolean, default=True)

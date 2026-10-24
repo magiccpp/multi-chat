@@ -135,6 +135,31 @@ def diff_renderable(diff: str) -> RenderableType:
     return Syntax(diff or "(no changes)", "diff", theme="ansi_dark", word_wrap=True)
 
 
+CLI_INSTALL = {
+    "claude_code": ("Claude Code", "curl -fsSL https://claude.ai/install.sh | bash"),
+    "cursor": ("Cursor", "curl https://cursor.com/install -fsS | bash"),
+    "copilot": ("GitHub Copilot", "npm install -g @github/copilot"),
+}
+
+
+def runner_text(runner: Any, state: str) -> Text:  # noqa: ANN401 - multichat_client.runner.agent.Runner
+    t = Text()
+    t.append(f"{runner.name}", style="bold")
+    t.append(f"  ({state})\n\nFolders the models may use:\n")
+    for r in runner.roots.roots:
+        t.append(f"  {r}\n")
+    t.append("\nAgent CLIs (checked every 2 minutes; /runner detect looks now):\n")
+    for driver, (label, install) in CLI_INSTALL.items():
+        info = runner.clis.get(driver)
+        if info:
+            t.append(f"  ✓ {label}", style="green")
+            t.append(f"  {info.get('path', '')}  {info.get('version', '')}\n", style="dim")
+        else:
+            t.append(f"  – {label}: not found. Install: ", style="")
+            t.append(f"{install}\n", style="dim")
+    return t
+
+
 WAIT_ICONS = {"approval": "✋", "tool": "⚙", "thinking": "…", "compacting": "⇣", "queued": "⏸"}
 
 

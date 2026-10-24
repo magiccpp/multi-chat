@@ -50,11 +50,35 @@ SMALL_WINDOW = 256_000  # the smaller choice offered for big models
 CHOICE_ABOVE = 512_000  # models with a larger maximum get a choice: 256K or their maximum
 
 
-def context_choices(context_length: int | None) -> list[int]:
-    """Context windows a user can pick for a model: [256K, max] when the maximum is over 512K, else just [max]."""
+def context_choices(context_length: int | None, override: list[int] | None = None) -> list[int]:
+    """Context windows a user can pick for a model: [256K, max] when the maximum is over 512K, else just [max].
+    `override` is the model's own fixed set (a Cursor model family: its standard and long-context variants)."""
+    if override:
+        return list(override)
     if not context_length:
         return []
     return [SMALL_WINDOW, context_length] if context_length > CHOICE_ABOVE else [context_length]
+
+
+def effort_choices(model: dict[str, Any]) -> list[str]:
+    """Effort levels a model (or participant) offers: its own set if it has one (Cursor), else all of them."""
+    return [e for e in EFFORTS if e in (model.get("effort_levels") or EFFORTS)]
+
+
+def pick_window(value: str, choices: list[int]) -> int | None:
+    """"max", "256k" (the smaller choice), or a size like "1m" / "200k" / "1000000" matched against the choices."""
+    if not choices:
+        return None
+    value = value.strip().lower()
+    if value == "max":
+        return choices[-1]
+    if value in ("256k", "small", "standard", "min"):
+        return choices[0]
+    try:
+        n = float(value[:-1]) * (1_000 if value.endswith("k") else 1_000_000) if value[-1:] in "km" else float(value)
+    except ValueError:
+        return None
+    return min(choices, key=lambda c: abs(c - n)) if any(abs(c - n) <= 0.05 * c for c in choices) else None
 
 
 def window_label(tokens: int | None) -> str:

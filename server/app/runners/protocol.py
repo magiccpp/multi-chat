@@ -22,4 +22,5 @@ METHODS = {
     "snapshot.begin",  # {root} -> {ref}
     "snapshot.changes",  # {root, ref} -> {changes: [{path, before, after}]}
     "agent_cli.run",  # {root, driver, args, env, stdin} -> stream {line}; result {exit_code}
+    "agent_cli.models",  # {driver, env} -> {output, exit_code}: the CLI's own model list, parsed by the server
 }

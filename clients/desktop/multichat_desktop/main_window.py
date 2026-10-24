@@ -258,7 +258,7 @@ class MainWindow(QMainWindow):
         self.ctl.call(self.ctl.client.memory(), show)
 
     def open_runner(self) -> None:
-        dlg = RunnerDialog(self)
+        dlg = RunnerDialog(self, self.ctl)
         dlg.accepted.connect(self.apply_runner_settings)
         dlg.open()
 

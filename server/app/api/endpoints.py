@@ -57,7 +57,7 @@ async def create_endpoint(body: EndpointIn, db: AsyncSession = Depends(get_db)) 
         base_url=body.base_url,
         api_key_enc=crypto.encrypt(body.api_key),
         enabled=body.enabled,
-        auto_models=body.auto_models if body.auto_models is not None else is_openrouter(body.base_url),
+        auto_models=body.auto_models if body.auto_models is not None else (is_openrouter(body.base_url) or body.driver == "cursor"),
         source="api",
     )
     db.add(row)

@@ -36,7 +36,6 @@ PRESETS = [
         "kind": "openai_compatible",
         "base_url": "https://models.github.ai/inference",
     },
-    {"id": "mock", "name": "Mock (offline demo)", "kind": "mock", "base_url": "mock://local?delay=0.02"},
 ]
 
 _cache: dict[tuple[int, str | None, str | None], Provider] = {}

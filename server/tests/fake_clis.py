@@ -38,6 +38,14 @@ args = sys.argv[1:]
 open(os.environ["FAKE_LOG"], "a").write(json.dumps({"cli": "cursor", "args": args, "key": os.environ.get("CURSOR_API_KEY")}) + "\n")
 if "--version" in args:
     print("2025.10.1"); sys.exit(0)
+if "--list-models" in args:
+    print("\x1b[1mAvailable models\x1b[0m\n")
+    for line in ["auto - Auto (current)", "gpt-5 - GPT-5", "gpt-5-high - GPT-5 High", "gpt-5-low - GPT-5 Low",
+                 "claude-opus-4-8 - Opus 4.8", "claude-opus-4-8-thinking-high - Opus 4.8 Thinking",
+                 "claude-opus-4-8-1m - Opus 4.8 1M", "claude-opus-4-8-1m-thinking-high - Opus 4.8 1M Thinking"]:
+        print(line)
+    print("\nTip: use --model <id> to switch")
+    sys.exit(0)
 def out(o): print(json.dumps(o), flush=True)
 out({"type": "system", "subtype": "init", "session_id": "cur-7"})
 if "--force" in args:

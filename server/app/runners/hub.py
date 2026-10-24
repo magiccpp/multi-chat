@@ -118,6 +118,16 @@ class RunnerHub:
         conn = self.connections.get(runner_id)
         return conn is not None and not conn.closed
 
+    async def _update_clis(self, runner_id: int, conn: RunnerConnection, clis: dict[str, Any]) -> None:
+        conn.hello["clis"] = clis
+        async with dbmod.sessionmaker()() as db:
+            row = await db.get(Runner, runner_id)
+            if row is not None:
+                row.clis = clis
+                await db.commit()
+        log.info("runner %s now has agent CLIs: %s", conn.hello.get("name"), ", ".join(clis) or "none")
+        asyncio.create_task(_refresh_clis())
+
     async def serve(self, ws: WebSocket) -> None:
         hello = await ws.receive_json()
         if hello.get("type") != "hello" or not hello.get("name"):
@@ -153,6 +163,9 @@ class RunnerHub:
         try:
             while True:
                 message = await ws.receive_json()
+                if message.get("type") == "clis":  # the runner found agent CLIs installed (or removed) since it connected
+                    await self._update_clis(runner_id, conn, dict(message.get("clis") or {}))
+                    continue
                 # Streams and responses are handled inline; handlers never block on the socket.
                 await conn.handle(message)
         except WebSocketDisconnect:

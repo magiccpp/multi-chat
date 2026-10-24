@@ -74,8 +74,11 @@ endpoints:
     kind: agent_cli
     driver: cursor
     api_key: ${CURSOR_API_KEY}      # from your Cursor dashboard; passed as CURSOR_API_KEY
+    # Cursor's own model list is fetched from a runner that has the CLI (`agent --list-models`), one model per
+    # family; effort and context window pick the variant (e.g. "…-thinking-high", "…-1m"). auto_models: false
+    # keeps only the models listed here; a listed slug (e.g. gpt-5-high) runs as is.
     models:
-      - {name: default, display_name: Cursor, color: "#111827"}
+      - {name: default, display_name: Cursor · Auto, color: "#111827"}
 
   - name: copilot
     kind: agent_cli
@@ -83,15 +86,6 @@ endpoints:
     api_key: ${COPILOT_GITHUB_TOKEN}  # passed as GH_TOKEN; leave empty to use `copilot login` on that machine
     models:
       - {name: default, display_name: GitHub Copilot, color: "#6e40c9"}
-
-  # Offline demo models (no key needed) — handy to try the clients.
-  - name: demo
-    kind: mock
-    base_url: mock://local?delay=0.02
-    enabled: true
-    models:
-      - {name: mock-alpha, display_name: Demo Alpha, color: "#2563eb"}
-      - {name: mock-beta, display_name: Demo Beta, color: "#db2777"}
 
 # SSH hosts the agents can work on (also addable from the clients).
 # The host key must be confirmed once from a client (fingerprint check) unless host_key is given here.

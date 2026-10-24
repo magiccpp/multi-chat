@@ -155,3 +155,30 @@ def test_cmd_wrapper_moves_prompt_to_file(tmp_path):
     assert args[0] == "-p" and args[2] == "--force" and ".multichat/" in args[1]
     assert f.read_text(encoding="utf-8") == 'Fix "auth"\nthen test'
     assert _args_for_cmd_wrapper(["-p", "short"], tmp_path) == (["-p", "short"], None)
+
+
+def test_find_prefers_windows_launchers_and_known_folders(tmp_path, monkeypatch):
+    from multichat_client.runner import cli_agents
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "agent").write_text("#!/bin/sh")  # Git Bash script: Windows can't start it
+    (a / "agent.ps1").write_text("")
+    (b / "agent.cmd").write_text("")
+    (b / "cursor-agent.ps1").write_text("")
+    # cursor-agent is preferred over agent (another tool may be called agent), then folder order, then .exe/.cmd/.ps1
+    assert cli_agents.find_in(["cursor-agent", "agent"], [str(a), str(b)], windows=True) == str(b / "cursor-agent.ps1")
+    assert cli_agents.find_in(["agent"], [str(a), str(b)], windows=True) == str(a / "agent.ps1")
+    (a / "agent.cmd").write_text("")
+    assert cli_agents.find_in(["agent"], [str(a), str(b)], windows=True) == str(a / "agent.cmd")
+    assert cli_agents.command(str(a / "agent.ps1"))[:2] == ["powershell.exe", "-NoProfile"]
+    assert cli_agents.command(str(a / "agent.cmd")) == [str(a / "agent.cmd")]
+    # Linux: executable files only
+    assert cli_agents.find_in(["agent"], [str(a)], windows=False) is None
+    (a / "agent").chmod(0o755)
+    assert cli_agents.find_in(["agent"], [str(a)], windows=False) == str(a / "agent")
+    # a folder from the installers' list is searched even when PATH doesn't have it
+    monkeypatch.setenv("PATH", str(b))
+    monkeypatch.setattr(cli_agents, "known_dirs", lambda: [str(a)])
+    assert str(a) in cli_agents.search_path() and cli_agents.search_path()[0] == str(b)

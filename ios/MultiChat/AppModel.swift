@@ -82,6 +82,12 @@ final class AppModel {
         }
     }
 
+    /// The server's current model list (availability may have changed since the app loaded it).
+    func reloadModels() async {
+        guard let api, let fresh = try? await api.models() else { return }
+        models = fresh
+    }
+
     /// Ask the server to re-check keys and vendor model lists, then reload the models.
     func checkAvailability() async {
         guard let api else { return }

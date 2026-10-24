@@ -26,7 +26,9 @@ class CursorDriver(CliDriver):
     name = "cursor"
 
     def build(self, run: CliRun) -> CliInvocation:
-        args = ["-p", "--output-format", "stream-json", *model_flag(run.model_name)]
+        # --trust: the user chose this folder in MultiChat; without it a first run in a folder stops at Cursor's
+        # "do you trust this directory" prompt, which a headless run can't answer.
+        args = ["-p", "--output-format", "stream-json", "--trust", *model_flag(run.model_name)]
         env = {"CURSOR_API_KEY": run.api_key} if run.api_key else {}
         inv = CliInvocation(args=args, env=env)
         if run.resume_id:

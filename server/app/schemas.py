@@ -20,7 +20,7 @@ class EndpointIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     enabled: bool = True
-    auto_models: bool | list[str] | None = None  # default: True for OpenRouter
+    auto_models: bool | list[str] | None = None  # default: True for OpenRouter and Cursor
 
 
 class EndpointPatch(BaseModel):
@@ -84,6 +84,9 @@ class ModelOut(ORM):
     availability_detail: str = ""
     context_length: int | None = None
     supports_effort: bool = False
+    # Only for models with a fixed set of choices (Cursor families); otherwise the clients' general rules apply.
+    effort_levels: list[str] | None = None
+    context_choices: list[int] | None = None
 
 
 # ---- ssh ------------------------------------------------------------------
@@ -201,6 +204,8 @@ class ParticipantOut(BaseModel):
     context_length: int | None = None  # the model's maximum, if known
     effort: str | None = None
     supports_effort: bool = False
+    effort_levels: list[str] | None = None
+    context_choices: list[int] | None = None
 
 
 class SessionOut(ORM):

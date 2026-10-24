@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.providers.agent_cli import cursor_models
 from app.schemas import ModelIn, ModelOut, ModelPatch
 from app.tables import Endpoint, Model
 
@@ -15,6 +16,9 @@ def model_out(m: Model, ep: Endpoint) -> ModelOut:
     out = ModelOut.model_validate(m)
     out.endpoint_name = ep.name
     out.endpoint_kind = ep.kind
+    out.enabled = m.enabled and ep.enabled  # a disabled endpoint (e.g. removed from config.yaml) hides its models
+    out.effort_levels = cursor_models.effort_levels(m.cli_variants)
+    out.context_choices = cursor_models.context_choices(m.cli_variants)
     return out
 
 

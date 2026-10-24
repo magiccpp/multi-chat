@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from multichat_client.state import EFFORT_LABELS, EFFORTS, choice_label, context_choices
+from multichat_client.state import EFFORT_LABELS, choice_label, context_choices, effort_choices
 from multichat_desktop import settings
 from multichat_desktop.controller import Controller
 
@@ -139,6 +139,8 @@ class ModelsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._fill({p["model_id"] for p in ctl.st.participants})
+        # the list may be older than the server's latest key / model check (e.g. a key added and the server restarted)
+        ctl.call(ctl.refresh_models(), lambda _: self._fill(set(self.selected())))
 
     def _fill(self, checked: set[int]) -> None:
         self.tree.blockSignals(True)
@@ -200,7 +202,7 @@ class ModelsDialog(QDialog):
     def _add_setting_widgets(self, item: QTreeWidgetItem, m: dict) -> None:
         cfg = self.settings.setdefault(m["id"], {"context_window": None, "effort": None})
         new_here = m["id"] not in {p["model_id"] for p in self.ctl.st.participants}
-        choices = context_choices(m.get("context_length"))
+        choices = context_choices(m.get("context_length"), m.get("context_choices"))
         if self.context_editable and new_here and cfg["context_window"] is None and len(choices) > 1:
             cfg["context_window"] = choices[0]  # default for a new session: 256K (cheaper than resending 1M)
         ctx = QComboBox()
@@ -218,7 +220,7 @@ class ModelsDialog(QDialog):
         ctx.currentIndexChanged.connect(lambda _i, mid=m["id"], w=ctx: self.settings[mid].__setitem__("context_window", w.currentData()))
         eff = QComboBox()
         eff.addItem("Default", None)
-        for level in EFFORTS:
+        for level in effort_choices(m):
             eff.addItem(EFFORT_LABELS[level], level)
         eff.setCurrentIndex(max(0, eff.findData(cfg["effort"])))
         eff.setEnabled(bool(m.get("supports_effort")))
@@ -878,10 +880,16 @@ class SshDialog(QDialog):
 
 
 class RunnerDialog(QDialog):
-    """Let MultiChat run tasks on this PC: which folders, and whether to confirm each command locally."""
+    """Let MultiChat run tasks on this PC: which folders, and whether to confirm each command locally; which agent
+    CLIs (Claude Code, Cursor, Copilot) it found here."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    CLI_NAMES = {"claude_code": ("Claude Code", "irm https://claude.ai/install.ps1 | iex"),
+                 "cursor": ("Cursor", "irm 'https://cursor.com/install?win32=true' | iex"),
+                 "copilot": ("GitHub Copilot", "npm install -g @github/copilot")}
+
+    def __init__(self, parent: QWidget | None = None, ctl: Controller | None = None) -> None:
         super().__init__(parent)
+        self.ctl = ctl
         self.setWindowTitle("Runner on this PC")
         self.resize(560, 420)
         layout = QVBoxLayout(self)
@@ -920,10 +928,49 @@ class RunnerDialog(QDialog):
         self.confirm = QCheckBox("Also ask me on this PC before every command, even when the session auto-approves")
         self.confirm.setChecked(settings.runner_confirm())
         layout.addWidget(self.confirm)
+
+        clis_row = QHBoxLayout()
+        clis_row.addWidget(QLabel("<b>Agent CLIs on this PC</b>"))
+        clis_row.addStretch(1)
+        self.detect_btn = QPushButton("Detect again")
+        self.detect_btn.setToolTip("Look again for Claude Code, Cursor and GitHub Copilot (it also checks every 2 minutes)")
+        self.detect_btn.clicked.connect(self._detect)
+        clis_row.addWidget(self.detect_btn)
+        layout.addLayout(clis_row)
+        self.clis = QLabel()
+        self.clis.setWordWrap(True)
+        self.clis.setTextFormat(Qt.TextFormat.RichText)
+        self.clis.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.clis)
+        runner = ctl.runner if ctl else None
+        self.show_clis(runner.clis if runner else None)
+        if ctl:
+            ctl.clis_changed.connect(self.show_clis)
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self._save)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
+
+    def show_clis(self, clis: dict | None) -> None:
+        if clis is None:
+            self.clis.setText("<i>The runner is off: turn it on to use Claude Code, Cursor or Copilot here.</i>")
+            self.detect_btn.setEnabled(False)
+            return
+        self.detect_btn.setEnabled(True)
+        rows = []
+        for driver, (label, install) in self.CLI_NAMES.items():
+            info = clis.get(driver)
+            if info:
+                rows.append(f"✓ <b>{label}</b> — {html.escape(info.get('path', ''))}"
+                            + (f" <span style='color:gray'>({html.escape(info['version'])})</span>" if info.get("version") else ""))
+            else:
+                rows.append(f"– {label}: not found. Install in PowerShell: <code>{html.escape(install)}</code>, then Detect again.")
+        self.clis.setText("<br>".join(rows))
+
+    def _detect(self) -> None:
+        if self.ctl and self.ctl.redetect_clis():
+            self.clis.setText(self.clis.text() + "<br><i>Looking…</i>")
 
     def _add(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Allow folder", os.path.expanduser("~"))

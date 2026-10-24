@@ -13,12 +13,13 @@ from app.agent.context import ContextInput, WorkspaceView, build_messages, syste
 from app.agent import status as waits
 from app.agent.events import bus
 from app.agent.tools import unified_diff
+from app.providers.agent_cli import cursor_models
 from app.providers.agent_cli.base import CliDriver, CliRun, render_transcript
 from app.providers.agent_cli.claude_code import ClaudeCodeDriver
 from app.providers.agent_cli.copilot import CopilotDriver
 from app.providers.agent_cli.cursor import CursorDriver
 from app.providers.base import UsageEvent, estimate_tokens
-from app.tables import AgentCliState, Endpoint, FileChange, Message, Model, Session, Vote
+from app.tables import AgentCliState, Endpoint, FileChange, Message, Model, Session, SessionModel, Vote
 from app.workspaces.base import Workspace, WorkspaceError
 from app.workspaces.runner import RunnerWorkspace
 
@@ -112,13 +113,19 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
         last_seen = max((m.id for m in messages if m.turn_id != turn_id or m.role == "user"), default=0)
         approve_edits, approve_commands = session.approve_edits, session.approve_commands
         prev_total = state.last_total_cost or 0.0
+        sm = (await db.execute(select(SessionModel).where(
+            SessionModel.session_id == session_id, SessionModel.model_id == model.id, SessionModel.left_at.is_(None)
+        ))).scalar_one_or_none()
+        # Cursor families: the session's effort and context window pick the model slug
+        slug = cursor_models.resolve(model.model_name, model.cli_variants, sm.effort if sm else None,
+                                     sm.context_window if sm else None)
         await db.commit()
 
     invocation = driver.build(
         CliRun(
             prompt=prompt,
             phase=phase,
-            model_name=model.model_name,
+            model_name=slug,
             api_key=crypto.decrypt(endpoint.api_key_enc),
             resume_id=resume_id,
             approve_edits=approve_edits,
@@ -138,7 +145,8 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
 
     msg = await _new_message(session_id, turn_id, model, phase)
     bus.publish(session_id, {"type": "message_start", "message": message_event(msg)})
-    waits.board.set(session_id, model.id, waits.STARTING, f"starting {label} on {workspace.info.label}",
+    shown = f" ({slug})" if slug not in ("", "default") else ""
+    waits.board.set(session_id, model.id, waits.STARTING, f"starting {label}{shown} on {workspace.info.label}",
                     f"{label} runs on that machine and works on its own; its text and tool calls show up as they come.")
 
     text: list[str] = []

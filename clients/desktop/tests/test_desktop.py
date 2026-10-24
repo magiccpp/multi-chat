@@ -162,6 +162,16 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         await ctl.open_session(s["id"])
         win.apply_runner_settings()
         await until(lambda: ctl.runner_state == "online")
+
+        # Runner dialog: which agent CLIs this PC has; Detect again looks once more
+        from multichat_desktop.dialogs import RunnerDialog
+
+        rdlg = RunnerDialog(win, ctl)
+        assert "Cursor" in rdlg.clis.text() and rdlg.detect_btn.isEnabled()
+        rdlg.clis.setText("stale")
+        rdlg.detect_btn.click()
+        await until(lambda: "Cursor" in rdlg.clis.text() and "Looking" not in rdlg.clis.text())
+        rdlg.reject()
         # a session without a folder uses this PC automatically, so models can inspect it in PLAN
         await until(lambda: ctl.st.session.get("workspace_kind") == "runner")
         assert ctl.st.session["workspace_path"] == str(work.resolve())
