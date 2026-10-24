@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.providers.base import (
     ChatMessage,
     Done,
+    Progress,
     Provider,
     ProviderError,
     StreamEvent,
@@ -85,6 +86,7 @@ class AnthropicProvider(Provider):
         input_tokens = output_tokens = 0
         stop_reason: str | None = None
         blocks: dict[int, dict[str, Any]] = {}
+        thinking = 0
         try:
             stream = await self.client.messages.create(**kwargs)
             async for event in stream:
@@ -106,7 +108,12 @@ class AnthropicProvider(Provider):
                     if delta.type == "text_delta":
                         yield TextDelta(delta.text)
                     elif delta.type == "input_json_delta" and event.index in blocks:
-                        blocks[event.index]["json"] += delta.partial_json
+                        slot = blocks[event.index]
+                        slot["json"] += delta.partial_json
+                        yield Progress("tool_args", slot["name"], len(slot["json"]))
+                    elif delta.type == "thinking_delta":
+                        thinking += len(getattr(delta, "thinking", "") or "")
+                        yield Progress("thinking", chars=thinking)
                 elif etype == "content_block_stop":
                     slot = blocks.pop(event.index, None)
                     if slot is not None:

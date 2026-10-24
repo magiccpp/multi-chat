@@ -97,6 +97,9 @@ async def test_tui_plan_vote_build(server, client, tmp_path):
         )
         await until(pilot, lambda: isinstance(app.screen, ApprovalScreen))
         app.save_screenshot(str(SHOTS / "tui-approval.svg"))
+        # the wait line under the log says what the turn is waiting for
+        await until(pilot, lambda: app.query_one("#waits").has_class("visible"))
+        assert "waiting for your approval to run `cat app.py`" in str(app.query_one("#waits").render())
         await pilot.press("a")
         await until(pilot, lambda: not app.st.busy and (root / "app.py").read_text() == "print('v2')\n")
         await pilot.pause(0.3)

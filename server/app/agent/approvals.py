@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agent.events import bus
+from app.agent.status import APPROVAL, approval_text, board
 
 
 @dataclass
@@ -23,11 +24,15 @@ class Approvals:
         future: asyncio.Future[Decision] = asyncio.get_running_loop().create_future()
         self._pending[call_id] = (session_id, future)
         bus.publish(session_id, {"type": "approval_required", "call_id": call_id, **payload})
+        model_id = payload.get("model_id")
+        prev = board.set(session_id, model_id, APPROVAL, approval_text(payload)) if model_id else None
         try:
             return await future
         finally:
             self._pending.pop(call_id, None)
             bus.publish(session_id, {"type": "approval_resolved", "call_id": call_id})
+            if model_id:
+                board.restore(session_id, model_id, prev)
 
     def resolve(self, session_id: int, call_id: str, decision: Decision) -> bool:
         entry = self._pending.get(call_id)

@@ -134,6 +134,31 @@ final class MultiChatKitTests: XCTestCase {
         XCTAssertEqual(st.name(7), "Alpha")
     }
 
+    func testWaitTips() throws {
+        var st = SessionState(session: try decode(Session.self, sessionJSON), messages: [], usage: [],
+                              models: try decode([ModelInfo].self, modelsJSON))
+        st.apply(try event(#"{"type": "turn_start"}"#))
+        st.apply(try event(#"{"type": "status", "model_id": 8, "state": "tool", "text": "running `ls` on pc", "hint": "Stop cancels it."}"#))
+        st.apply(try event(#"{"type": "status", "model_id": 7, "state": "approval", "text": "waiting for your approval to run `rm x`"}"#))
+        let start = st.status[8]!.since
+        XCTAssertEqual(st.waits(now: start).map(\.name), ["Alpha"], "approvals show at once")
+        let later = st.waits(now: start.addingTimeInterval(12))
+        XCTAssertEqual(later.map(\.name), ["Alpha", "Beta"], "participant order")
+        XCTAssertEqual(later[1].line, "Beta: running `ls` on pc · 12 s")
+        XCTAssertEqual(later[1].hint, "Stop cancels it.")
+        st.apply(try event(#"{"type": "status", "model_id": 8, "state": "tool", "text": "running `ls -la` on pc"}"#))
+        XCTAssertEqual(st.status[8]?.since, start, "same state keeps its start time")
+        st.apply(try event(#"{"type": "status", "model_id": 7, "state": "writing", "text": "writing its answer"}"#))
+        let last = st.status[7]!.last
+        XCTAssertTrue(st.waits(now: last.addingTimeInterval(5)).allSatisfy { $0.modelId != 7 })
+        XCTAssertEqual(st.waits(now: last.addingTimeInterval(25)).first?.line, "Alpha: no new output · 25 s")
+        st.apply(try event(#"{"type": "status", "model_id": 8, "state": null}"#))
+        XCTAssertNil(st.status[8])
+        st.apply(try event(#"{"type": "turn_end", "status": "complete"}"#))
+        XCTAssertTrue(st.status.isEmpty)
+        XCTAssertEqual(Wait.elapsed(125), "2 min 05 s")
+    }
+
     /// Talks to a real server when MULTICHAT_TEST_URL and MULTICHAT_TEST_TOKEN are set.
     func testLiveServerRoundTrip() async throws {
         let env = ProcessInfo.processInfo.environment

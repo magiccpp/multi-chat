@@ -7,6 +7,7 @@ import json
 import logging
 import platform
 import socket
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,15 @@ def ws_url(http_url: str) -> str:
     if http_url.startswith("http://"):
         return "ws://" + http_url[7:] + "/api/runners/connect"
     return http_url
+
+
+def os_name() -> str:
+    """ "Windows 11", "Linux 6.8.0" … without platform.release() on Windows, which may run `cmd /c ver` and flash a
+    console window from the windowed desktop app."""
+    if sys.platform == "win32":
+        v = sys.getwindowsversion()
+        return f"Windows {'11' if v.major == 10 and v.build >= 22000 else v.major}"
+    return f"{platform.system()} {platform.release()}".strip()
 
 
 class Runner:
@@ -62,7 +72,7 @@ class Runner:
         return {
             "type": "hello",
             "name": self.name,
-            "os": f"{platform.system()} {platform.release()}".strip(),
+            "os": os_name(),
             "shell": self.shell,
             "hostname": socket.gethostname(),
             "roots": [str(r) for r in self.roots.roots],

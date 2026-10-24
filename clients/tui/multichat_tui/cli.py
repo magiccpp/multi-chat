@@ -98,21 +98,25 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 console.print(f"[red]{p.name}: {exc.detail}[/]")
                 return 1
         finished: list[MessageView] = []
-        async for ev in c.chat(sid, args.prompt, attachment_ids=attachment_ids):
-            st.apply(ev)
-            if ev["type"] == "message_end":
-                m = st.messages[ev["message"]["id"]]
-                finished.append(m)
-                if not args.json:
-                    console.print(message_header(st, m))
-                    console.print(f"[dim]message id {m.id}[/]")
-                    console.print(message_body(st, m))
-                    console.print()
-            elif ev["type"] == "approval_required" and not args.json:
-                console.print(f"[yellow]approval needed for {ev.get('kind')}: {ev.get('command') or ev.get('path')} "
-                              f"— approve it in the TUI/desktop app, or set /approve cmds auto[/]")
-            elif ev["type"] in ("error", "notice") and not args.json:
-                console.print(f"[red]{ev.get('message')}[/]")
+        # a spinner line saying what the models are waiting for (terminals only)
+        spinner = console.status("sending…") if console.is_terminal and not args.json else None
+        if spinner:
+            spinner.start()
+
+        async def tick() -> None:
+            while True:
+                waits = st.waits()
+                spinner.update(" │ ".join(w.line for w in waits) if waits else "working…")
+                await asyncio.sleep(1)
+
+        ticker = asyncio.create_task(tick()) if spinner else None
+        try:
+            await _stream_run(c, sid, args, st, attachment_ids, finished)
+        finally:
+            if ticker:
+                ticker.cancel()
+            if spinner:
+                spinner.stop()
         if args.json:
             for m in finished:
                 print(json.dumps({"session_id": sid, "message_id": m.id, "seq": m.seq, "model": st.name(m.model_id),
@@ -121,6 +125,25 @@ async def cmd_run(args: argparse.Namespace) -> int:
             console.print(usage_text(st))
             console.print(f"[dim]session {sid} · vote with: multichat vote <message id> up|down[/]")
         return 0
+
+
+async def _stream_run(c: MultiChatClient, sid: int, args: argparse.Namespace, st: SessionState,
+                      attachment_ids: list[int], finished: list[MessageView]) -> None:
+    async for ev in c.chat(sid, args.prompt, attachment_ids=attachment_ids):
+        st.apply(ev)
+        if ev["type"] == "message_end":
+            m = st.messages[ev["message"]["id"]]
+            finished.append(m)
+            if not args.json:
+                console.print(message_header(st, m))
+                console.print(f"[dim]message id {m.id}[/]")
+                console.print(message_body(st, m))
+                console.print()
+        elif ev["type"] == "approval_required" and not args.json:
+            console.print(f"[yellow]approval needed for {ev.get('kind')}: {ev.get('command') or ev.get('path')} "
+                          f"— approve it in the TUI/desktop app, or set /approve cmds auto[/]")
+        elif ev["type"] in ("error", "notice") and not args.json:
+            console.print(f"[red]{ev.get('message')}[/]")
 
 
 def _resolve(name: str, models: list[dict]) -> dict:

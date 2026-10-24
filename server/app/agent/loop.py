@@ -16,6 +16,7 @@ from sqlalchemy.orm import undefer
 
 from app import db as dbmod
 from app import memory
+from app.agent import status as waits
 from app.agent.context import (
     COMPACT_AT,
     KEEP_RECENT,
@@ -36,7 +37,7 @@ from app.agent.tools import ToolContext, execute, tools_for
 from app.config import get_settings
 from app.config_sync import get_setting
 from app.pricing import cost_for
-from app.providers.base import ChatMessage, ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
+from app.providers.base import ChatMessage, Progress, ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
 from app.providers.registry import provider_for
 from app.tables import Attachment, Compaction, Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
 from app.workspaces.base import NoWorkspace, Workspace, WorkspaceError
@@ -226,7 +227,12 @@ class TurnManager:
             async with dbmod.sessionmaker()() as db:
                 ctx = await self._context(db, session_id, model, NoWorkspace(), False)
             ctx.window = ctx.window or 128_000
-            done = await self._compact(session_id, turn_id, model, provider_for(endpoint), ctx, manual=True)
+            waits.board.set(session_id, model.id, waits.COMPACTING, "compacting its context (summarising the older "
+                            "conversation)")
+            try:
+                done = await self._compact(session_id, turn_id, model, provider_for(endpoint), ctx, manual=True)
+            finally:
+                waits.board.clear(session_id, model.id)
             results.append({"model_id": model.id, "display_name": model.display_name, "compacted": done})
         return results
 
@@ -239,6 +245,9 @@ class TurnManager:
         status = "complete"
         try:
             if mode == "relay" and phase == "plan":
+                for model_id in targets[1:]:
+                    waits.board.set(session_id, model_id, waits.QUEUED, "waiting for its turn (relay mode answers one "
+                                    "model at a time, each seeing the replies before it)")
                 for model_id in targets:  # each sees the replies before it
                     await self._participant(session_id, turn_id, model_id)
             else:
@@ -274,6 +283,7 @@ class TurnManager:
             else:
                 await self._llm(session_id, turn_id, model, endpoint, workspace)
         finally:
+            waits.board.clear(session_id, model_id)
             await workspace.close()
 
     async def _context(
@@ -406,6 +416,12 @@ class TurnManager:
                                           tools, project_memory)
             # at the start of this model's turn: compact when the history fills ~80% of its context window
             if step == 0 and ctx.window and ctx.used > COMPACT_AT * ctx.window:
+                waits.board.set(
+                    session_id, model.id, waits.COMPACTING,
+                    f"compacting its context: ~{ctx.used:,} of {ctx.window:,} tokens used",
+                    f"At ~{int(COMPACT_AT * 100)}% of its context window a model summarises the older conversation so "
+                    "the next request fits. This takes one extra request to the same model.",
+                )
                 if await self._compact(session_id, turn_id, model, provider, ctx):
                     async with dbmod.sessionmaker()() as db:
                         ctx = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools,
@@ -426,6 +442,11 @@ class TurnManager:
                 approve_edits, approve_commands = session.approve_edits, session.approve_commands
                 phase = session.phase
             bus.publish(session_id, {"type": "message_start", "message": message_event(msg)})
+            note = Notes(session_id, model.id)
+            note(waits.WAITING,
+                 f"waiting for the reply to start ({endpoint.name})" if step == 0
+                 else f"reading the tool results; waiting for its next reply ({endpoint.name})",
+                 waits.waiting_hint(endpoint.name, ctx.used, ctx.window, effort))
 
             text: list[str] = []
             calls: list[ToolCall] = []
@@ -440,6 +461,9 @@ class TurnManager:
                             ttft = int((time.monotonic() - started) * 1000)
                         text.append(ev.text)
                         bus.publish(session_id, {"type": "delta", "message_id": msg.id, "model_id": model.id, "text": ev.text})
+                        note(waits.WRITING, "writing its answer")
+                    elif isinstance(ev, Progress):
+                        note.progress(ev)
                     elif isinstance(ev, ToolCallEvent):
                         calls.append(ev.call)
                     elif isinstance(ev, UsageEvent):
@@ -480,7 +504,9 @@ class TurnManager:
                     session_id,
                     {"type": "tool_call", "message_id": msg.id, "model_id": model.id, "call": call.to_json()},
                 )
+            where = workspace.info.label
             if phase == "plan":
+                note(waits.TOOL, *waits.describe_calls(calls, where, defaults.plan_command_timeout))
                 # PLAN tools only read, so a reply's calls run side by side (a slow command doesn't hold up the
                 # rest); results are stored in the order the model asked for them.
                 tasks = [asyncio.ensure_future(execute(call, tool_context())) for call in calls]
@@ -498,6 +524,7 @@ class TurnManager:
                     await self._tool_message(session_id, turn_id, model, call, result)
                 continue
             for call in calls:  # BUILD: in order; edits and commands may depend on each other
+                note(waits.TOOL, *waits.describe_calls([call], where, defaults.command_timeout))
                 try:
                     result = await execute(call, tool_context())
                 except asyncio.CancelledError:
@@ -576,6 +603,37 @@ class TurnManager:
             db.add(row)
             await db.commit()
         bus.publish(session_id, {"type": "tool_result", "model_id": model.id, "call_id": call.id, "message": message_event(row)})
+
+
+class Notes:
+    """Status updates for one model reply: publishes when the state changes, and progress (characters of reasoning
+    or of a tool call being written) at most every 2 seconds."""
+
+    EVERY = 2.0
+
+    def __init__(self, session_id: int, model_id: int) -> None:
+        self.session_id, self.model_id = session_id, model_id
+        self.state: str | None = None
+        self.at = 0.0
+
+    def __call__(self, state: str, text: str, hint: str | None = None) -> None:
+        self.state, self.at = state, time.monotonic()
+        waits.board.set(self.session_id, self.model_id, state, text, hint)
+
+    def progress(self, ev: Progress) -> None:
+        state = waits.THINKING if ev.kind == "thinking" else waits.TOOL_ARGS
+        if state == self.state and time.monotonic() - self.at < self.EVERY:
+            return
+        if state == waits.THINKING:
+            self(state, "thinking before it answers",
+                 f"Reasoning models think first; ~{ev.chars // 4:,} tokens of reasoning so far." if ev.chars > 40 else None)
+        else:
+            self(state, f"writing a {ev.name or 'tool'} call ({size(ev.chars)} so far)",
+                 "Large tool calls (a whole file for write_file) take a while; nothing shows until the call is complete.")
+
+
+def size(chars: int) -> str:
+    return f"{chars:,} characters" if chars < 10_000 else f"{chars / 1024:.0f} KB"
 
 
 turns = TurnManager()

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app import crypto, memory
 from app import db as dbmod
 from app.agent.context import ContextInput, WorkspaceView, build_messages, system_prompt
+from app.agent import status as waits
 from app.agent.events import bus
 from app.agent.tools import unified_diff
 from app.providers.agent_cli.base import CliDriver, CliRun, render_transcript
@@ -137,6 +138,8 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
 
     msg = await _new_message(session_id, turn_id, model, phase)
     bus.publish(session_id, {"type": "message_start", "message": message_event(msg)})
+    waits.board.set(session_id, model.id, waits.STARTING, f"starting {label} on {workspace.info.label}",
+                    f"{label} runs on that machine and works on its own; its text and tool calls show up as they come.")
 
     text: list[str] = []
     calls: list[dict] = []
@@ -160,8 +163,11 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
                 ttft = int((time.monotonic() - started) * 1000)
             text.append(parsed.text)
             bus.publish(session_id, {"type": "delta", "message_id": msg.id, "model_id": model.id, "text": parsed.text})
+            waits.board.set(session_id, model.id, waits.WRITING, "writing")
         if parsed.tool_call:
             call = {**parsed.tool_call, "external": True}
+            waits.board.set(session_id, model.id, waits.AGENT, f"{label} is using {_tool_line(parsed.tool_call)}",
+                            f"{label} runs its own tools; the result goes back to it, not to MultiChat.")
             calls.append(call)
             bus.publish(session_id, {"type": "tool_call", "message_id": msg.id, "model_id": model.id, "call": call})
         if parsed.session_id:
@@ -257,3 +263,11 @@ async def _record_changes(session_id: int, turn_id: str, model_id: int, workspac
             session_id,
             {"type": "file_changed", "path": c.path, "diff": unified_diff(c.path, c.before, c.after), "model_id": model_id, "turn_id": turn_id},
         )
+
+
+def _tool_line(call: dict) -> str:
+    args = call.get("arguments") or {}
+    detail = next((str(args[k]) for k in ("command", "file_path", "path", "pattern", "url", "query") if args.get(k)), "")
+    detail = " ".join(detail.split())
+    detail = detail if len(detail) <= 60 else detail[:59] + "…"
+    return f"{call.get('name', 'a tool')}: {detail}" if detail else str(call.get("name", "a tool"))

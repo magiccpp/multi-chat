@@ -52,6 +52,7 @@ struct SessionView: View {
                         ForEach(model.visible) { m in
                             MessageRow(model: model, message: m).id(m.id)
                         }
+                        // after every message, so newer replies never push an approval out of sight
                         ForEach(model.pendingApprovals) { a in
                             ApprovalCard(model: model, approval: a) { reviewing = a }
                         }
@@ -65,6 +66,7 @@ struct SessionView: View {
                 }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            WaitBanner(state: model.state)
             TokenBar(state: model.state)
             Composer(model: model)
         }
@@ -175,6 +177,36 @@ struct ModelTabs: View {
                 .background(selected ? color : Color.secondary.opacity(0.12), in: Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// What the models are waiting for during a long wait ("Beta: running `uname -a` on This PC · 12 s"), with a hint;
+/// ticks every second.
+struct WaitBanner: View {
+    let state: SessionState
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let waits = state.busy ? state.waits(now: context.date) : []
+            if !waits.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(waits) { w in
+                        VStack(alignment: .leading, spacing: 1) {
+                            (Text(w.name).bold().foregroundStyle(Color(hex: w.color))
+                                + Text(": \(w.text) ")
+                                + Text("· \(Wait.elapsed(w.seconds))").foregroundStyle(.secondary))
+                                .font(.footnote)
+                            if let hint = w.hint {
+                                Text(hint).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.bar)
+            }
+        }
     }
 }
 

@@ -22,6 +22,39 @@ public struct Approval: Hashable, Identifiable, Sendable {
     public var id: String { callId }
 }
 
+/// What a model is waiting for (server `status` events).
+public struct ModelStatus: Hashable, Sendable {
+    public var state: String  // queued | starting | compacting | waiting_model | thinking | writing | tool_args | tool | approval | agent
+    public var text: String
+    public var hint: String?
+    public var since: Date  // when this state began
+    public var last: Date  // last sign of life (status, text, command output)
+}
+
+/// A tip about a long wait: "Beta: running `uname -a` on This PC · 12 s".
+public struct Wait: Hashable, Identifiable, Sendable {
+    public var modelId: Int
+    public var name: String
+    public var color: String
+    public var state: String
+    public var text: String
+    public var hint: String?
+    public var seconds: Double
+
+    public var id: Int { modelId }
+    public var line: String { "\(name): \(text) · \(Wait.elapsed(seconds))" }
+
+    public static let showAfter = 3.0  // seconds before a tip appears (approvals show at once)
+    public static let stallAfter = 20.0  // seconds without new text while a reply is written
+    public static let stallHint = "It may be thinking or writing a long tool call; the connection is still open. Stop cancels the turn."
+
+    public static func elapsed(_ seconds: Double) -> String {
+        let s = Int(seconds)
+        let sec = s % 60
+        return s < 60 ? "\(s) s" : "\(s / 60) min \(sec < 10 ? "0" : "")\(sec) s"
+    }
+}
+
 /// Client-side view of one session, updated from server events (same rules as the desktop app and TUI).
 public struct SessionState: Sendable {
     public var session: Session?
@@ -34,6 +67,7 @@ public struct SessionState: Sendable {
     public var fileChanges: [JSONValue] = []
     public var busy = false
     public var notices: [String] = []
+    public var status: [Int: ModelStatus] = [:]  // model id -> what it is waiting for
 
     public init() {}
 
@@ -77,6 +111,23 @@ public struct SessionState: Sendable {
 
     public var totalCost: Double { usage.values.reduce(0) { $0 + $1.cost } }
 
+    /// Tips for long waits, in participant order (same rules as the desktop app and TUI).
+    public func waits(now: Date = Date()) -> [Wait] {
+        let order = Dictionary(participants.enumerated().map { ($1.modelId, $0) }, uniquingKeysWith: { a, _ in a })
+        return status.sorted { (order[$0.key] ?? 999) < (order[$1.key] ?? 999) }.compactMap { entry -> Wait? in
+            let (mid, s) = (entry.key, entry.value)
+            if s.state == "writing" {
+                let idle = now.timeIntervalSince(s.last)
+                return idle >= Wait.stallAfter
+                    ? Wait(modelId: mid, name: name(mid), color: color(mid), state: "stalled", text: "no new output", hint: Wait.stallHint, seconds: idle)
+                    : nil
+            }
+            let waited = now.timeIntervalSince(s.since)
+            guard waited >= Wait.showAfter || s.state == "approval" else { return nil }
+            return Wait(modelId: mid, name: name(mid), color: color(mid), state: s.state, text: s.text, hint: s.hint, seconds: waited)
+        }
+    }
+
     // MARK: events
 
     mutating func add(_ m: Message) {
@@ -97,10 +148,22 @@ public struct SessionState: Sendable {
         case "turn_end":
             busy = false
             approvals.removeAll()
+            status.removeAll()
+        case "status":
+            guard let mid = event["model_id"]?.int else { break }
+            if let state = event["state"]?.string, !state.isEmpty {
+                let now = Date()
+                let since = status[mid].flatMap { $0.state == state ? $0.since : nil } ?? now
+                status[mid] = ModelStatus(state: state, text: event["text"]?.string ?? state, hint: event["hint"]?.string,
+                                          since: since, last: now)
+            } else {
+                status[mid] = nil
+            }
         case "message", "message_start", "message_end", "tool_result":
             if let m = try? event["message"]?.decode(Message.self) { add(m) }
         case "delta":
             if let id = event["message_id"]?.int, let text = event["text"]?.string { messages[id]?.content += text }
+            if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
         case "tool_call":
             if let id = event["message_id"]?.int, let call = try? event["call"]?.decode(ToolCall.self) {
                 var calls = messages[id]?.toolCalls ?? []
@@ -111,6 +174,7 @@ public struct SessionState: Sendable {
             }
         case "tool_progress":
             if let id = event["call_id"]?.string, let text = event["text"]?.string { progress[id, default: ""] += text }
+            if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
         case "usage":
             let key = event["model_id"]?.int ?? 0
             var u = usage[key] ?? UsageTotals()

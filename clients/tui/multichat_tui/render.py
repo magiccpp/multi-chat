@@ -12,7 +12,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from multichat_client.state import MessageView, SessionState
+from multichat_client.state import MessageView, SessionState, Wait, elapsed
 
 BR = re.compile(r"<br\s*/?>", re.IGNORECASE)  # models put <br> in table cells
 VOTE_MARK = {1: ("▲", "green"), -1: ("▼", "red")}
@@ -133,6 +133,24 @@ def attachments_text(attachments: list[dict]) -> Text:
 
 def diff_renderable(diff: str) -> RenderableType:
     return Syntax(diff or "(no changes)", "diff", theme="ansi_dark", word_wrap=True)
+
+
+WAIT_ICONS = {"approval": "✋", "tool": "⚙", "thinking": "…", "compacting": "⇣", "queued": "⏸"}
+
+
+def wait_lines(waits: list[Wait]) -> Text:
+    """ "⏳ Beta: running `uname -a` on This PC · 12 s" plus a dim hint line per wait."""
+    t = Text()
+    for i, w in enumerate(waits):
+        if i:
+            t.append("\n")
+        t.append(WAIT_ICONS.get(w.state, "⏳") + " ")
+        t.append(w.name, style=f"bold {w.color}")
+        t.append(f": {w.text} ")
+        t.append(f"· {elapsed(w.seconds)}", style="dim")
+        if w.hint:
+            t.append(f"\n   {w.hint}", style="dim italic")
+    return t
 
 
 def usage_text(st: SessionState) -> Text:

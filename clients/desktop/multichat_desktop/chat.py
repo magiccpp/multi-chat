@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from multichat_client.state import EFFORT_LABELS, EFFORTS, MessageView, window_label
+from multichat_client.state import EFFORT_LABELS, EFFORTS, MessageView, elapsed, window_label
 from multichat_desktop import attachments as att_mod
 from multichat_desktop.attachments import AttachmentView, PendingAttachment, PendingChip
 from multichat_desktop.controller import Controller
@@ -75,7 +75,7 @@ class MessageCard(QFrame):
         self.up = self._tool("▲", "Upvote", lambda: self._vote(1))
         self.down = self._tool("▼", "Downvote", lambda: self._vote(-1))
         self.builder = self._tool("★ Pick as builder", "Use this model to build (switches to BUILD)", self._pick, checkable=False)
-        self.copy = self._tool("⧉", "Copy reply", self._copy, checkable=False)
+        self.copy = self._tool("Copy", "Copy this reply (Markdown) to the clipboard", self._copy, checkable=False)
         for w in (self.up, self.down, self.builder, self.copy):
             header.addWidget(w)
         layout.addLayout(header)
@@ -120,8 +120,23 @@ class MessageCard(QFrame):
         if self.view.model_id:
             self.ctl.pick_builder(self.view.model_id)
 
-    def _copy(self) -> None:
-        QGuiApplication.clipboard().setText(self.view.content)
+    def _copy(self, _checked: bool = False, attempt: int = 0) -> None:
+        m = self.view
+        text = m.content or "\n".join(f"{c.get('name')}: {args_summary(c.get('arguments') or {})}" for c in m.tool_calls)
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(text)
+        if clipboard.text() != text and attempt < 4:
+            # Windows: another program (a clipboard manager, remote desktop) can hold the clipboard for a moment
+            QTimer.singleShot(150, lambda: self._copy(attempt=attempt + 1))
+            return
+        ok = clipboard.text() == text
+        self.copy.setText("✓ Copied" if ok else "Copy failed")
+        self.copy.setToolTip("" if ok else "The clipboard is busy (held by another program); try again")
+        QTimer.singleShot(1500, self._copy_reset)
+
+    def _copy_reset(self) -> None:
+        self.copy.setText("Copy")
+        self.copy.setToolTip("Copy this reply (Markdown) to the clipboard")
 
     def _toggle(self, _: str) -> None:
         self.expanded = not self.expanded
@@ -379,6 +394,55 @@ class ContextDialog(QDialog):
         self.ctl.call(self.ctl.client.compact(self.ctl.st.session_id), done)
 
 
+class WaitBar(QFrame):
+    """What the models are waiting for during a long wait, with how long so far: "⏳ Beta: running `uname -a` on
+    This PC · 12 s" and a hint underneath. Ticks every second while a turn runs."""
+
+    ICONS = {"approval": "✋", "tool": "⚙", "thinking": "💭", "compacting": "🗜", "queued": "⏸", "stalled": "⏳"}
+
+    def __init__(self, ctl: Controller) -> None:
+        super().__init__()
+        self.ctl = ctl
+        self.setObjectName("waitbar")
+        self.rows = QVBoxLayout(self)
+        self.rows.setContentsMargins(10, 4, 10, 4)
+        self.rows.setSpacing(1)
+        self.shown: list[tuple] = []
+        self.setVisible(False)
+        self.timer = QTimer(self)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start()
+
+    def refresh(self) -> None:
+        waits = self.ctl.st.waits() if self.ctl.st.busy else []
+        key = [(w.model_id, w.state, w.text, w.hint, int(w.seconds)) for w in waits]
+        if key == self.shown:
+            return
+        self.shown = key
+        while self.rows.count():
+            item = self.rows.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for w in waits:
+            icon = self.ICONS.get(w.state, "⏳")
+            line = QLabel(
+                f"{icon} <b style='color:{w.color}'>{html.escape(w.name)}</b>: {html.escape(w.text)}"
+                f" <span style='color:{colors()['muted']}'>· {elapsed(w.seconds)}</span>"
+            )
+            line.setTextFormat(Qt.TextFormat.RichText)
+            line.setWordWrap(True)
+            line.setToolTip(w.hint or "")
+            self.rows.addWidget(line)
+            if w.hint:
+                hint = QLabel(w.hint)
+                hint.setObjectName("muted")
+                hint.setWordWrap(True)
+                hint.setStyleSheet("font-size: 11px; padding-left: 18px;")
+                self.rows.addWidget(hint)
+        self.setVisible(bool(waits))
+
+
 class ApprovalCard(QFrame):
     """Inline approve/reject for commands (edits also open a diff tab in the editor)."""
 
@@ -480,6 +544,8 @@ class ChatPanel(QWidget):
         self.list.addStretch(1)
         self.scroll.setWidget(inner)
         layout.addWidget(self.scroll, 1)
+        self.wait_bar = WaitBar(ctl)
+        layout.addWidget(self.wait_bar)
 
         self.chips_row = QHBoxLayout()
         self.chips_row.setContentsMargins(8, 0, 8, 0)
@@ -657,9 +723,11 @@ class ChatPanel(QWidget):
         if message_id in self.cards:
             return
         card = MessageCard(self.ctl, message_id)
-        card.setVisible(self._visible(message_id))
         self.cards[message_id] = card
-        self.list.insertWidget(self.list.count() - 1, card)
+        # into the list first: setVisible on a widget without a parent shows it as its own window for a moment.
+        # New messages go above pending approvals, which stay last in the list so they can't scroll out of sight.
+        self.list.insertWidget(self.list.count() - 1 - len(self.approval_cards), card)
+        card.setVisible(self._visible(message_id))
 
     def _visible(self, message_id: int) -> bool:
         return self.tab_model is None or any(m.id == message_id for m in self.ctl.st.ordered(self.tab_model))
@@ -672,6 +740,11 @@ class ChatPanel(QWidget):
     def _scroll_end(self) -> None:
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def show_approval(self, card: ApprovalCard) -> None:
+        """Scroll an approval into view, even when the user had scrolled up."""
+        if card in self.approval_cards.values():
+            self.scroll.ensureWidgetVisible(card, 0, 20)
 
     def _flush(self) -> None:
         if not self.dirty:
@@ -763,10 +836,11 @@ class ChatPanel(QWidget):
                 self.dirty.add(ev["message_id"])
             self.update_costs()
         elif etype == "approval_required":
-            card = ApprovalCard(self.ctl, ev)
-            self.approval_cards[ev["call_id"]] = card
-            self.list.insertWidget(self.list.count() - 1, card)
-            QTimer.singleShot(50, self._scroll_end)
+            if ev["call_id"] not in self.approval_cards:
+                card = ApprovalCard(self.ctl, ev)
+                self.approval_cards[ev["call_id"]] = card
+                self.list.insertWidget(self.list.count() - 1, card)
+                QTimer.singleShot(50, lambda: self.show_approval(card))
         elif etype == "approval_resolved":
             card = self.approval_cards.pop(ev["call_id"], None)
             if card:
@@ -776,7 +850,10 @@ class ChatPanel(QWidget):
             self.rebuild_chips()
             self.update_controls()
             self.dirty.update(self.cards)  # "pick as builder" visibility depends on the phase
+        elif etype == "status":
+            self.wait_bar.refresh()
         elif etype in ("turn_start", "turn_end"):
+            self.wait_bar.refresh()
             self.update_controls()
             if etype == "turn_end":
                 self.dirty.update(self.cards)

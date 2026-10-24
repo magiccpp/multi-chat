@@ -63,11 +63,21 @@ class UsageEvent:
 
 
 @dataclass
+class Progress:
+    """Output that isn't answer text: reasoning, or a tool call being written. Lets the apps say what a model is
+    doing while no text arrives."""
+
+    kind: str  # thinking | tool_args
+    name: str = ""  # tool name for tool_args
+    chars: int = 0  # characters so far (of the reasoning or the tool arguments)
+
+
+@dataclass
 class Done:
     stop_reason: str | None = None
 
 
-StreamEvent = TextDelta | ToolCallEvent | UsageEvent | Done
+StreamEvent = TextDelta | ToolCallEvent | UsageEvent | Progress | Done
 
 
 class ProviderError(Exception):

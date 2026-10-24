@@ -17,7 +17,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import qasync  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QToolButton  # noqa: E402
+from PySide6.QtCore import QEvent, QObject  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMainWindow, QMenu, QToolButton, QWidget  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 TOKEN = "desktop-test-token"
@@ -83,6 +84,34 @@ def server(tmp_path_factory):
         proc.wait(10)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+class StrayWindows(QObject):
+    """Records widgets that show up as their own top-level window although they aren't dialogs, menus or the main
+    window: a card made visible before it was put in its list flashes on screen as a separate window."""
+
+    ALLOWED = (QDialog, QMainWindow, QMenu)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[str] = []
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if (event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow()
+                and not isinstance(obj, self.ALLOWED) and type(obj).__name__ not in ("StatsWindow", "QTipLabel")
+                and not obj.inherits("QComboBoxPrivateContainer")):
+            self.seen.append(type(obj).__name__)
+        return False
+
+
+@pytest.fixture(autouse=True)
+def no_stray_windows():
+    app = QApplication.instance() or QApplication([])
+    watcher = StrayWindows()
+    app.installEventFilter(watcher)
+    yield
+    app.removeEventFilter(watcher)
+    assert watcher.seen == [], f"widgets flashed up as separate windows: {watcher.seen}"
 
 
 def run_async(coro):
@@ -179,6 +208,12 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         win.chat.cards[replies[0].id].down.click()
         await until(lambda: ctl.st.messages[replies[1].id].vote == 1 and ctl.st.messages[replies[0].id].vote == -1)
 
+        # Copy puts the reply on the clipboard and says so
+        card = win.chat.cards[replies[1].id]
+        card.copy.click()
+        assert QApplication.clipboard().text() == ctl.st.messages[replies[1].id].content
+        assert card.copy.text() == "✓ Copied"
+
         # ★ pick as builder -> BUILD
         win.chat.cards[replies[1].id].builder.click()
         await until(lambda: ctl.st.session.get("phase") == "build")
@@ -196,6 +231,17 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         await until(lambda: any(isinstance(win.editor.widget(i), DiffView) and win.editor.widget(i).accept_btn.isVisible()
                                 for i in range(win.editor.count())))
         assert any(isinstance(w, ApprovalCard) for w in win.chat.approval_cards.values())
+        # the approval is the last item in the chat list and scrolled into view
+        approval = next(iter(win.chat.approval_cards.values()))
+        assert win.chat.list.indexOf(approval) == win.chat.list.count() - 2  # just above the trailing stretch
+        await asyncio.sleep(0.3)
+        viewport = win.chat.scroll.viewport()
+        top = approval.mapTo(viewport, approval.rect().topLeft()).y()
+        assert 0 <= top and top + approval.height() <= viewport.height(), (top, approval.height(), viewport.height())
+        # the wait bar says what the turn is waiting for
+        await until(lambda: win.chat.wait_bar.isVisible())
+        tip = win.chat.wait_bar.rows.itemAt(0).widget().text()
+        assert "waiting for your approval to change auth.py" in tip, tip
         await asyncio.sleep(0.2)
         win.grab().save(str(SHOTS / "desktop-approval.png"))
         diff = next(win.editor.widget(i) for i in range(win.editor.count()) if isinstance(win.editor.widget(i), DiffView))

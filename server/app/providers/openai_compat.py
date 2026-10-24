@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 from app.providers.base import (
     ChatMessage,
     Done,
+    Progress,
     Provider,
     ProviderError,
     StreamEvent,
@@ -120,7 +121,7 @@ class OpenAICompatProvider(Provider):
             raise ProviderError(str(exc)) from exc
 
         calls: dict[int, dict[str, str]] = {}
-        text_len = 0
+        text_len = reasoning_len = 0
         usage: UsageEvent | None = None
         finish: str | None = None
         try:
@@ -135,6 +136,12 @@ class OpenAICompatProvider(Provider):
                     )
                 for choice in chunk.choices:
                     delta = choice.delta
+                    # reasoning text: OpenRouter "reasoning", DeepSeek / vLLM "reasoning_content"
+                    extra = delta.model_extra or {}
+                    thought = extra.get("reasoning") or extra.get("reasoning_content")
+                    if isinstance(thought, str) and thought:
+                        reasoning_len += len(thought)
+                        yield Progress("thinking", chars=reasoning_len)
                     if delta.content:
                         text_len += len(delta.content)
                         yield TextDelta(delta.content)
@@ -146,6 +153,7 @@ class OpenAICompatProvider(Provider):
                             slot["name"] += tc.function.name
                         if tc.function and tc.function.arguments:
                             slot["args"] += tc.function.arguments
+                            yield Progress("tool_args", slot["name"], len(slot["args"]))
                     if choice.finish_reason:
                         finish = choice.finish_reason
         except openai.OpenAIError as exc:

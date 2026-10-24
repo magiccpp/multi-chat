@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,6 +84,34 @@ class UsageView:
     estimated: bool = False
 
 
+SHOW_AFTER = 3.0  # seconds of waiting before a tip appears (approvals show at once)
+STALL_AFTER = 20.0  # seconds without new text, while a reply is being written, before a tip appears
+STALL_HINT = ("It may be thinking or writing a long tool call; the connection is still open. "
+              "Stop cancels the turn.")
+
+
+def elapsed(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s} s" if s < 60 else f"{s // 60} min {s % 60:02d} s"
+
+
+@dataclass
+class Wait:
+    """A tip about what a model is waiting for: "Beta: running `uname -a` on This PC · 12 s"."""
+
+    model_id: int
+    name: str
+    color: str
+    state: str
+    text: str
+    hint: str | None
+    seconds: float
+
+    @property
+    def line(self) -> str:
+        return f"{self.name}: {self.text} · {elapsed(self.seconds)}"
+
+
 class SessionState:
     def __init__(self) -> None:
         self.session: dict[str, Any] = {}
@@ -95,6 +124,8 @@ class SessionState:
         self.file_changes: list[dict[str, Any]] = []
         self.busy = False
         self.errors: list[str] = []
+        # model id -> {state, text, hint, since, last}: what it is waiting for (server `status` events)
+        self.status: dict[int, dict[str, Any]] = {}
 
     # ---- loading ----
     def load(self, session: dict, messages: list[dict], usage: list[dict], models: list[dict]) -> None:
@@ -109,6 +140,7 @@ class SessionState:
             for u in usage
         }
         self.busy = bool(session.get("busy"))
+        self.status = {}
 
     def _add(self, view: MessageView) -> None:
         old = self.messages.get(view.id)
@@ -168,6 +200,23 @@ class SessionState:
     def total_cost(self) -> float:
         return sum(u.cost for u in self.usage.values())
 
+    def waits(self, now: float | None = None) -> list[Wait]:
+        """Tips for long waits, in participant order: a status older than SHOW_AFTER, or a reply that stopped
+        producing text for STALL_AFTER."""
+        now = time.monotonic() if now is None else now
+        order = {p["model_id"]: i for i, p in enumerate(self.participants)}
+        out = []
+        for mid, s in sorted(self.status.items(), key=lambda kv: order.get(kv[0], 999)):
+            if s["state"] == "writing":
+                idle = now - s["last"]
+                if idle >= STALL_AFTER:
+                    out.append(Wait(mid, self.name(mid), self.color(mid), "stalled", "no new output", STALL_HINT, idle))
+                continue
+            waited = now - s["since"]
+            if waited >= SHOW_AFTER or s["state"] == "approval":
+                out.append(Wait(mid, self.name(mid), self.color(mid), s["state"], s["text"] or s["state"], s["hint"], waited))
+        return out
+
     # ---- events ----
     def apply(self, event: dict[str, Any]) -> str:
         """Apply a server event; returns its type so the UI can decide what to redraw."""
@@ -177,18 +226,33 @@ class SessionState:
         elif etype == "turn_end":
             self.busy = False
             self.approvals.clear()
+            self.status.clear()
+        elif etype == "status":
+            mid, state = event.get("model_id"), event.get("state")
+            if not state:
+                self.status.pop(mid, None)
+            else:
+                now = time.monotonic()
+                prev = self.status.get(mid)
+                since = prev["since"] if prev and prev["state"] == state else now
+                self.status[mid] = {"state": state, "text": event.get("text"), "hint": event.get("hint"),
+                                    "since": since, "last": now}
         elif etype in ("message", "message_start", "message_end"):
             self._add(MessageView.from_json(event["message"]))
         elif etype == "delta":
             m = self.messages.get(event["message_id"])
             if m is not None:
                 m.content += event["text"]
+            if event.get("model_id") in self.status:
+                self.status[event["model_id"]]["last"] = time.monotonic()
         elif etype == "tool_call":
             m = self.messages.get(event["message_id"])
             if m is not None and not any(c.get("id") == event["call"]["id"] for c in m.tool_calls):
                 m.tool_calls.append(event["call"])
         elif etype == "tool_progress":
             self.progress[event["call_id"]] = self.progress.get(event["call_id"], "") + event["text"]
+            if event.get("model_id") in self.status:
+                self.status[event["model_id"]]["last"] = time.monotonic()
         elif etype == "tool_result":
             self._add(MessageView.from_json(event["message"]))
         elif etype == "usage":

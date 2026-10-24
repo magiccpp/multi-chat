@@ -22,7 +22,7 @@ from multichat_client.config import ClientConfig
 from multichat_client.runner.agent import Runner
 from multichat_client.state import EFFORTS, SessionState, context_choices, window_label
 from multichat_tui import commands as cmds
-from multichat_tui.render import context_table, cost_table, money, tokens, usage_text
+from multichat_tui.render import context_table, cost_table, money, tokens, usage_text, wait_lines
 from multichat_tui.screens import (
     ApprovalScreen,
     ModelsScreen,
@@ -70,6 +70,8 @@ class MultiChatApp(App):
     #log { height: 1fr; padding: 0 1; }
     #sidebar { width: 36; border-left: solid $panel-lighten-2; padding: 0 1; display: none; }
     #sidebar.visible { display: block; }
+    #waits { height: auto; max-height: 8; padding: 0 1; background: $boost; display: none; }
+    #waits.visible { display: block; }
     #quickvote { height: auto; padding: 0 1; background: $boost; display: none; }
     #quickvote.visible { display: block; }
     #suggest { height: auto; max-height: 8; padding: 0 2; color: $text-muted; display: none; }
@@ -137,6 +139,7 @@ class MultiChatApp(App):
             with Vertical(id="sidebar"):
                 yield Static(id="side-participants")
                 yield Static(id="side-files")
+        yield Static(id="waits")
         yield Static(id="quickvote")
         yield Static(id="suggest")
         yield PromptArea(id="prompt", placeholder="Message the models…  (/ for commands, enter to send)")
@@ -144,6 +147,7 @@ class MultiChatApp(App):
 
     async def on_mount(self) -> None:
         self.set_interval(0.05, self._flush)
+        self.set_interval(1, self.update_waits)
         self.query_one(PromptArea).focus()
         try:
             self.models = await self.client.models()
@@ -326,16 +330,27 @@ class MultiChatApp(App):
         elif etype in ("error", "notice"):
             name = self.st.name(ev.get("model_id")) if ev.get("model_id") else "server"
             self.notify(f"{name}: {ev.get('message')}", severity="error" if etype == "error" else "warning", timeout=8)
+        elif etype == "status":
+            self.update_waits()
         elif etype == "turn_start":
             self.hide_quickvote()
             self.update_header()
         elif etype == "turn_end":
+            self.update_waits()
             self.update_header()
             self.update_status()
             self.dirty.update(m.id for m in self.st.messages.values() if m.turn_id == ev.get("turn_id"))
             self.offer_quickvote(ev.get("turn_id"))
 
     # ------------------------------------------------------------------ header / status / sidebar
+
+    def update_waits(self) -> None:
+        """What the models are waiting for during a long wait (ticks every second)."""
+        waits = self.st.waits() if self.st.busy else []
+        box = self.query_one("#waits", Static)
+        box.set_class(bool(waits), "visible")
+        if waits:
+            box.update(wait_lines(waits))
 
     def update_header(self) -> None:
         s = self.st.session

@@ -61,6 +61,7 @@ def apply(app: QApplication) -> None:
         QFrame#approval {{ background: {c['panel']}; border: 2px solid {c['accent']}; border-radius: 8px; }}
         QLabel#muted {{ color: {c['muted']}; }}
         QFrame#attachment {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 6px; }}
+        QFrame#waitbar {{ background: {c['panel2']}; border-top: 1px solid {c['border']}; }}
         QFrame#costbar {{ background: {c['panel2']}; border-bottom: 1px solid {c['border']}; }}
         QToolButton#costchip {{ border: 1px solid {c['border']}; border-radius: 10px; padding: 1px 8px; background: {c['panel']}; }}
         QToolButton#chip {{ border: 1px solid {c['border']}; border-radius: 10px; padding: 2px 8px; }}

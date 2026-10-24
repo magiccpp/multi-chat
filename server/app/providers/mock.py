@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from app.providers.base import (
     ChatMessage,
     Done,
+    Progress,
     Provider,
     StreamEvent,
     TextDelta,
@@ -34,6 +35,7 @@ class MockProvider(Provider):
         super().__init__(api_key=api_key, base_url=base_url)
         query = parse_qs(urlparse(base_url or "").query)
         self.delay = float(query.get("delay", ["0"])[0])
+        self.think = float(query.get("think", ["0"])[0])  # seconds of "reasoning" before the first word
 
     async def stream(
         self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec], effort: str | None = None
@@ -81,6 +83,9 @@ class MockProvider(Provider):
             if calls:
                 text += f" Calling {', '.join(c.name for c in calls)}."
 
+        if self.think:
+            yield Progress("thinking", chars=1)
+            await asyncio.sleep(self.think)
         for word in re.findall(r"\S+\s*", text):
             if self.delay:
                 await asyncio.sleep(self.delay)
