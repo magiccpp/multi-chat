@@ -15,7 +15,7 @@ def test_snapshot_detects_changes(tmp_path, monkeypatch, use_git):
     root = tmp_path / "proj"
     root.mkdir()
     (root / "a.txt").write_bytes(b"one\n")
-    (root / "gone.txt").write_bytes(b"bye\r\n")  # CRLF survives the snapshot unchanged
+    (root / "gone.txt").write_bytes(b"bye\r\n")
     (root / "node_modules").mkdir()
     (root / "node_modules" / "ignored.js").write_text("x")
     if use_git:
@@ -27,7 +27,9 @@ def test_snapshot_detects_changes(tmp_path, monkeypatch, use_git):
     (root / "new.txt").write_text("hi\n")
     changes = {c["path"]: c for c in snapshot.changes(root, ref)}
     assert changes["a.txt"] == {"path": "a.txt", "before": "one\n", "after": "two\n"}
-    assert changes["gone.txt"]["after"] is None and changes["gone.txt"]["before"] == "bye\r\n"
+    assert changes["gone.txt"]["after"] is None
+    # copy snapshots keep the bytes (CRLF intact); git snapshots follow core.autocrlf (true by default on Windows)
+    assert changes["gone.txt"]["before"] in ({"bye\r\n", "bye\n"} if use_git else {"bye\r\n"})
     assert changes["new.txt"]["before"] is None
     assert not any("node_modules" in p for p in changes)
 
