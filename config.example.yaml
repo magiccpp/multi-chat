@@ -116,6 +116,7 @@ web:
 defaults:
   availability_interval_minutes: 30   # how often keys and model lists are re-checked
   approve_edits: auto              # auto | ask — for new sessions
-  approve_commands: ask
+  approve_commands: ask            # BUILD: ask before each command
+  plan_commands: auto              # PLAN: read-only commands (git log, Get-ChildItem, ssh host "cat ...") run: auto | ask | off
   max_steps: 40                    # tool-loop steps per model per turn
   command_timeout: 600             # seconds

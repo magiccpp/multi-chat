@@ -38,6 +38,7 @@ class RuntimeDefaults:
     max_steps: int
     command_timeout: int
     output_limit: int
+    plan_commands: str = "auto"
 
 
 async def runtime_defaults(db: AsyncSession) -> RuntimeDefaults:
@@ -47,6 +48,7 @@ async def runtime_defaults(db: AsyncSession) -> RuntimeDefaults:
         max_steps=int(d.get("max_steps", s.max_steps)),
         command_timeout=int(d.get("command_timeout", s.command_timeout)),
         output_limit=int(d.get("tool_output_limit", s.tool_output_limit)),
+        plan_commands=str(d.get("plan_commands", "auto")),
     )
 
 
@@ -254,7 +256,7 @@ class TurnManager:
             async with dbmod.sessionmaker()() as db:
                 session = await db.get(Session, session_id)
                 tools = (
-                    tools_for(session.phase, workspace, bool(web_search_cfg.get("provider")))
+                    tools_for(session.phase, workspace, bool(web_search_cfg.get("provider")), defaults.plan_commands)
                     if model.supports_tools
                     else []
                 )
@@ -271,6 +273,7 @@ class TurnManager:
                 db.add(msg)
                 await db.commit()
                 approve_edits, approve_commands = session.approve_edits, session.approve_commands
+                phase = session.phase
             bus.publish(session_id, {"type": "message_start", "message": message_event(msg)})
 
             text: list[str] = []
@@ -320,6 +323,8 @@ class TurnManager:
                     web_search=web_search_cfg,
                     emit=lambda ev: bus.publish(session_id, ev),
                     record_change=record_change,
+                    phase=phase,
+                    plan_commands=defaults.plan_commands,
                 )
                 try:
                     result = await execute(call, ctx)

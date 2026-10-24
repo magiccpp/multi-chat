@@ -9,6 +9,7 @@ from typing import Any
 
 from app import crypto
 from app.agent.approvals import approvals
+from app.agent.readonly import check_command
 from app.providers.base import ToolCall, ToolSpec
 from app.web.fetch import FetchError, web_fetch
 from app.web.search import SearchError, web_search
@@ -82,6 +83,14 @@ RUN_COMMAND = ToolSpec(
         "required": ["command"],
     },
 )
+RUN_COMMAND_READ_ONLY = ToolSpec(
+    "run_command",
+    "PLAN phase: run a READ-ONLY shell command in the workspace root (non-interactive; stdin is closed) to inspect "
+    "code, configuration, installed software, services, logs, or another machine (e.g. ssh host \"cat /etc/app.conf\", "
+    "docker exec / kubectl exec ... cat). Commands that change anything (writing files, installing, uninstalling, "
+    "restarting services, git commit/push, ...) are refused; describe those for the BUILD phase instead.",
+    RUN_COMMAND.parameters,
+)
 WEB_FETCH = ToolSpec(
     "web_fetch",
     "Download a web page or file over http(s) and return it as readable text/markdown.",
@@ -97,12 +106,14 @@ READ_ONLY = [LIST_DIR, READ_FILE, GREP]
 WRITE = [WRITE_FILE, EDIT_FILE, RUN_COMMAND]
 
 
-def tools_for(phase: str, workspace: Workspace, web_search_enabled: bool) -> list[ToolSpec]:
+def tools_for(phase: str, workspace: Workspace, web_search_enabled: bool, plan_commands: str = "auto") -> list[ToolSpec]:
     tools: list[ToolSpec] = []
     if workspace.supports_tools:
         tools += READ_ONLY
         if phase == "build":
             tools += WRITE
+        elif plan_commands != "off":
+            tools.append(RUN_COMMAND_READ_ONLY)
     tools.append(WEB_FETCH)
     if web_search_enabled:
         tools.append(WEB_SEARCH)
@@ -134,6 +145,8 @@ class ToolContext:
     web_search: dict[str, Any]
     emit: Callable[[dict[str, Any]], None]
     record_change: Callable[[str, str | None, str | None], Awaitable[None]]
+    phase: str = "build"
+    plan_commands: str = "auto"  # PLAN: auto (read-only commands run) | ask (also need approval) | off
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -193,6 +206,8 @@ async def execute(call: ToolCall, ctx: ToolContext) -> str:
         if name == "grep":
             out = await ctx.workspace.grep(args["pattern"], args.get("path") or ".", args.get("glob"), 200)
             return _truncate(out.strip() or "No matches.", ctx.output_limit)
+        if ctx.phase == "plan" and name in ("write_file", "edit_file"):
+            return "Error: PLAN phase is read-only. Describe the change; the builder makes it in BUILD."
         if name == "write_file":
             before = await ctx.workspace.read_file(args["path"])
             return await _apply_write(ctx, call, args["path"], before, args["content"])
@@ -212,7 +227,17 @@ async def execute(call: ToolCall, ctx: ToolContext) -> str:
         if name == "run_command":
             command = args["command"]
             timeout = min(int(args.get("timeout") or ctx.command_timeout), ctx.command_timeout * 6)
-            if ctx.approve_commands == "ask":
+            if ctx.phase == "plan":
+                if ctx.plan_commands == "off":
+                    return "Error: commands are turned off in the PLAN phase."
+                verdict = check_command(command)
+                if not verdict:
+                    return (f"Refused in PLAN (read-only): {verdict.reason}. Use a read-only command to inspect, "
+                            "or describe this step for the BUILD phase.")
+                ask = ctx.plan_commands == "ask"
+            else:
+                ask = ctx.approve_commands == "ask"
+            if ask:
                 rejected = await _approve(ctx, call, {"kind": "command", "command": command})
                 if rejected:
                     return rejected

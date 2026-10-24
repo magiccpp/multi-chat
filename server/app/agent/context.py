@@ -68,9 +68,13 @@ def system_prompt(ci: ContextInput) -> str:
     ]
     if ci.phase == "plan":
         parts.append(
-            "Phase: PLAN. Understand the problem and propose a concrete approach. You may inspect files with the "
-            "read-only tools, but do not try to modify anything. Be specific: name files, functions and steps. "
-            "The user will compare the models' answers and pick one model to build."
+            "Phase: PLAN. Understand the problem and propose a concrete approach. Investigate first: read files "
+            "with the read-only tools and, when available, run read-only commands with run_command to check code, "
+            "configuration, installed software, services, logs and remote machines (over ssh, docker exec, kubectl "
+            "exec). Do not modify anything: commands that write files, install or uninstall software, change settings "
+            "or restart services are refused in PLAN, so put them in your plan for the BUILD phase. Be specific: name "
+            "files, functions, commands and steps. The user will compare the models' answers and pick one model to "
+            "build."
         )
     else:
         parts.append(

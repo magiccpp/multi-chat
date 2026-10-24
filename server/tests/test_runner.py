@@ -75,6 +75,32 @@ async def test_plan_reads_but_cannot_write(client, runner):
     assert (await client.get(f"/api/sessions/{s['id']}/workspace/file", params={"path": "hello.py"})).json()["content"] == "print('hello')\n"
 
 
+async def test_plan_runs_read_only_commands_and_refuses_changes(client, runner):
+    r, root = runner
+    models = await models_by_name(client)
+    s = (
+        await client.post(
+            "/api/sessions",
+            json={"title": "plan-commands", "model_ids": [models["mock-beta"]["id"]],
+                  "workspace": {"kind": "runner", "runner_id": r.runner_id, "path": str(root)}},
+        )
+    ).json()
+    assert s["approve_commands"] == "ask"  # BUILD would ask; read-only commands in PLAN just run
+    prompt = "\n".join([
+        "Check things",
+        '@tool run_command {"command": "cat hello.py && ls -la | grep hello"}',
+        '@tool run_command {"command": "touch made-in-plan"}',
+        '@tool run_command {"command": "echo x > out.txt"}',
+    ])
+    events = await chat(client, s["id"], prompt)
+    assert not [e for e in events if e["type"] == "approval_required"]
+    results = [e["message"]["content"] for e in events if e["type"] == "tool_result"]
+    assert "print('hello')" in results[0] and "exit code 0" in results[0]
+    assert results[1].startswith("Refused in PLAN") and "touch" in results[1]
+    assert results[2].startswith("Refused in PLAN") and "redirect" in results[2]
+    assert not (root / "made-in-plan").exists() and not (root / "out.txt").exists()
+
+
 async def test_build_edits_runs_command_with_approval_and_reverts(client, runner):
     r, root = runner
     s = await build_session(client, r.runner_id, root)
