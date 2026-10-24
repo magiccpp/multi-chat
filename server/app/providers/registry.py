@@ -29,6 +29,13 @@ PRESETS = [
     {"id": "ollama", "name": "Ollama", "kind": "openai_compatible", "base_url": "http://localhost:11434/v1"},
     {"id": "claude_code", "name": "Claude Code (CLI)", "kind": "agent_cli", "driver": "claude_code", "base_url": None},
     {"id": "cursor", "name": "Cursor (CLI)", "kind": "agent_cli", "driver": "cursor", "base_url": None},
+    {"id": "copilot", "name": "GitHub Copilot (CLI)", "kind": "agent_cli", "driver": "copilot", "base_url": None},
+    {
+        "id": "github_models",
+        "name": "GitHub Models",
+        "kind": "openai_compatible",
+        "base_url": "https://models.github.ai/inference",
+    },
     {"id": "mock", "name": "Mock (offline demo)", "kind": "mock", "base_url": "mock://local?delay=0.02"},
 ]
 

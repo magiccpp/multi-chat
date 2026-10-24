@@ -319,11 +319,13 @@ class TurnManager:
         model: Model,
         started: float,
         ttft: int | None,
+        external: bool = False,
     ) -> None:
         async with dbmod.sessionmaker()() as db:
             row = await db.get(Message, msg.id)
             row.content = text
-            row.tool_calls = [c.to_json() for c in calls] or None
+            # External calls were run by an agent CLI itself; they are shown but never replayed to API models.
+            row.tool_calls = [{**c.to_json(), **({"external": True} if external else {})} for c in calls] or None
             row.status = status
             if usage is None:
                 from app.providers.base import estimate_tokens

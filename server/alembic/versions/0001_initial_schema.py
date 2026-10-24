@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-24 00:08:57.758934
+Create Date: 2026-10-24 00:18:51.298330
 """
 from collections.abc import Sequence
 
@@ -109,6 +109,7 @@ def upgrade() -> None:
     sa.Column('model_id', sa.Integer(), nullable=False),
     sa.Column('cli_session_id', sa.String(length=200), nullable=True),
     sa.Column('last_seen_message_id', sa.Integer(), nullable=False),
+    sa.Column('last_total_cost', sa.Float(), nullable=False),
     sa.ForeignKeyConstraint(['model_id'], ['models.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['session_id'], ['sessions.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),

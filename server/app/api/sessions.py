@@ -1,8 +1,11 @@
+import json
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -335,3 +338,34 @@ async def revert(session_id: int, body: RevertIn, db: AsyncSession = Depends(get
         raise HTTPException(502, str(exc)) from exc
     await db.commit()
     return {"turn_id": turn_id, "restored": sorted(set(restored))}
+
+
+class AgentApprovalIn(BaseModel):
+    model_id: int
+    tool_name: str
+    input: dict = {}
+    tool_use_id: str | None = None
+
+
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+@router.post("/{session_id}/agent-approval")
+async def agent_approval(session_id: int, body: AgentApprovalIn, db: AsyncSession = Depends(get_db)) -> dict:
+    """Called by the approval bridge that Claude Code runs on a runner; blocks until the user decides."""
+    await _get(db, session_id)
+    args = body.input
+    if body.tool_name == "Bash":
+        payload = {"kind": "command", "command": str(args.get("command", ""))}
+    elif body.tool_name in EDIT_TOOLS:
+        path = str(args.get("file_path") or args.get("notebook_path") or "")
+        if "content" in args:
+            diff = unified_diff(path, None, str(args["content"]))
+        else:
+            diff = unified_diff(path, str(args.get("old_string", "")), str(args.get("new_string", "")))
+        payload = {"kind": "edit", "path": path, "diff": diff}
+    else:
+        payload = {"kind": "tool", "detail": json.dumps(args)[:2000]}
+    call_id = body.tool_use_id or f"cli-{uuid.uuid4().hex[:12]}"
+    decision = await approvals.request(session_id, call_id, {"model_id": body.model_id, "tool": body.tool_name, **payload})
+    return {"approve": decision.approve, "note": decision.note}

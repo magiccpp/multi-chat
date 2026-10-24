@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 OutputCallback = Callable[[str], Awaitable[None]]
+LineCallback = Callable[[str, bool], Awaitable[None]]  # (line, is_stderr)
 
 
 class WorkspaceError(Exception):
@@ -95,7 +96,13 @@ class Workspace(ABC):
         return []
 
     async def run_agent_cli(
-        self, driver: str, args: list[str], env: dict[str, str], stdin: str | None, on_line: OutputCallback
+        self,
+        driver: str,
+        args: list[str],
+        env: dict[str, str],
+        stdin: str | None,
+        on_line: LineCallback,
+        approval: dict[str, Any] | None = None,
     ) -> int:
         raise WorkspaceError("this workspace cannot run agent CLIs")
 

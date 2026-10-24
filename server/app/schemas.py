@@ -16,7 +16,7 @@ EndpointKind = Literal["openai_compatible", "anthropic", "agent_cli", "mock"]
 class EndpointIn(BaseModel):
     name: str
     kind: EndpointKind
-    driver: Literal["claude_code", "cursor"] | None = None
+    driver: Literal["claude_code", "cursor", "copilot"] | None = None
     base_url: str | None = None
     api_key: str | None = None
     enabled: bool = True

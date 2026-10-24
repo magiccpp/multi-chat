@@ -7,6 +7,7 @@ from app.workspaces.base import (
     Change,
     CommandResult,
     DirEntry,
+    LineCallback,
     OutputCallback,
     Workspace,
     WorkspaceError,
@@ -84,15 +85,21 @@ class RunnerWorkspace(Workspace):
         return [Change(c["path"], c.get("before"), c.get("after")) for c in result.get("changes", [])]
 
     async def run_agent_cli(
-        self, driver: str, args: list[str], env: dict[str, str], stdin: str | None, on_line: OutputCallback
+        self,
+        driver: str,
+        args: list[str],
+        env: dict[str, str],
+        stdin: str | None,
+        on_line: LineCallback,
+        approval: dict[str, Any] | None = None,
     ) -> int:
         async def on_stream(data: dict[str, Any]) -> None:
             if "line" in data:
-                await on_line(data["line"])
+                await on_line(data["line"], bool(data.get("stderr")))
 
         result = await self._call(
             "agent_cli.run",
-            {"driver": driver, "args": args, "env": env, "stdin": stdin},
+            {"driver": driver, "args": args, "env": env, "stdin": stdin, "approval": approval},
             on_stream=on_stream,
             timeout=None,
         )

@@ -186,6 +186,7 @@ class AgentCliState(Base):
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"))
     cli_session_id: Mapped[str | None] = mapped_column(String(200))
     last_seen_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    last_total_cost: Mapped[float] = mapped_column(Float, default=0.0)  # CLIs report cumulative cost on resume
 
 
 class FileChange(Base):

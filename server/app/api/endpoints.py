@@ -44,7 +44,7 @@ async def list_endpoints(db: AsyncSession = Depends(get_db)) -> list[EndpointOut
 @router.post("", response_model=EndpointOut, status_code=201)
 async def create_endpoint(body: EndpointIn, db: AsyncSession = Depends(get_db)) -> EndpointOut:
     if body.kind == "agent_cli" and not body.driver:
-        raise HTTPException(422, "agent_cli endpoints need a driver (claude_code or cursor)")
+        raise HTTPException(422, "agent_cli endpoints need a driver (claude_code, cursor or copilot)")
     if (await db.execute(select(Endpoint).where(Endpoint.name == body.name))).scalar_one_or_none():
         raise HTTPException(409, "an endpoint with this name exists")
     row = Endpoint(

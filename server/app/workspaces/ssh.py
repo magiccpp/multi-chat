@@ -16,6 +16,7 @@ from app.workspaces.base import (
     Change,
     CommandResult,
     DirEntry,
+    LineCallback,
     OutputCallback,
     Workspace,
     WorkspaceError,
@@ -239,9 +240,15 @@ class SshWorkspace(Workspace):
         return await gitsnap.changes(self._exec, ref)
 
     async def run_agent_cli(
-        self, driver: str, args: list[str], env: dict[str, str], stdin: str | None, on_line: OutputCallback
+        self,
+        driver: str,
+        args: list[str],
+        env: dict[str, str],
+        stdin: str | None,
+        on_line: LineCallback,
+        approval: dict[str, Any] | None = None,
     ) -> int:
-        exe = {"claude_code": "claude", "cursor": "cursor-agent"}[driver]
+        exe = {"claude_code": "claude", "cursor": "cursor-agent", "copilot": "copilot"}[driver]
         if self.powershell:
             sets = "".join(f"$env:{k}={_ps_quote(v)}; " for k, v in env.items())
             command = sets + "& " + " ".join(_ps_quote(a) for a in [exe, *args])
@@ -253,8 +260,11 @@ class SshWorkspace(Workspace):
         if stdin:
             process.stdin.write(stdin)
         process.stdin.write_eof()
-        async for line in process.stdout:
-            await on_line(line.rstrip("\n"))
+        async def pump(stream: Any, is_err: bool) -> None:
+            async for line in stream:
+                await on_line(line.rstrip("\n"), is_err)
+
+        await asyncio.gather(pump(process.stdout, False), pump(process.stderr, True))
         await process.wait()
         return int(process.exit_status or 0)
 
