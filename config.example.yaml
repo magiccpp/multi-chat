@@ -3,12 +3,19 @@
 #   - Rows defined here are read-only from the clients (endpoints removed here are disabled, not deleted).
 #   - ${NAME} is replaced from the server's environment (.env); ${NAME:-default} supplies a fallback.
 #   - Prices are USD per 1M tokens and drive the cost columns. Set them from each vendor's pricing page;
-#     a model with price 0 still records tokens. OpenRouter models imported from a client get prices automatically.
+#     a model with price 0 still records tokens. OpenRouter reports prices itself.
+#   - At start-up and every 30 minutes (defaults.availability_interval_minutes) the server checks each endpoint's
+#     key and fetches the vendor's model list. Models that can't be used right now (no/invalid key, not offered)
+#     are shown greyed out in the apps and cannot be added to a session.
+#   - auto_models: true imports the vendor's chat models automatically (OpenRouter: hundreds, with prices);
+#     a list of glob patterns imports only matching ids, e.g. ["openai/*", "anthropic/claude-*"].
+#     Models listed under `models:` keep their own display name, color and prices.
 
 endpoints:
   - name: anthropic
     kind: anthropic
     api_key: ${ANTHROPIC_API_KEY}
+    auto_models: ["claude-*"]   # other Claude models appear too (set their prices in the desktop app)
     models:
       - {name: claude-opus-5-5, display_name: Claude Opus 5.5, color: "#d97706", input_price: 4.00, output_price: 20.00}
       - {name: claude-sonnet-5-5, display_name: Claude Sonnet 5.5, color: "#ea580c", input_price: 2.00, output_price: 10.00}
@@ -33,7 +40,8 @@ endpoints:
     kind: openai_compatible
     base_url: https://openrouter.ai/api/v1
     api_key: ${OPENROUTER_API_KEY}
-    models: []   # add ids like "google/gemini-2.5-pro", or import them (with prices) from a client
+    auto_models: true    # every OpenRouter chat model, with prices; or e.g. ["openai/*", "deepseek/*", "qwen/*"]
+    models: []
 
   # GitHub Models: OpenAI-compatible, token needs the `models:read` permission.
   # - name: github-models
@@ -103,6 +111,7 @@ web:
   allow_private: false             # let web_fetch reach private/LAN addresses
 
 defaults:
+  availability_interval_minutes: 30   # how often keys and model lists are re-checked
   approve_edits: auto              # auto | ask — for new sessions
   approve_commands: ask
   max_steps: 40                    # tool-loop steps per model per turn

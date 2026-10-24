@@ -19,6 +19,9 @@ dependencies = [
   "cryptography>=42",
   "pyyaml>=6",
   "websockets>=12",
+  "pypdf>=4",
+  "python-docx>=1.1",
+  "pillow>=10",
 ]
 
 [project.optional-dependencies]

@@ -55,9 +55,18 @@ async def session_out(db: AsyncSession, s: Session) -> SessionOut:
 
 
 async def _set_models(db: AsyncSession, session_id: int, model_ids: list[int]) -> None:
+    joined = {
+        sm.model_id
+        for sm in (
+            await db.execute(select(SessionModel).where(SessionModel.session_id == session_id, SessionModel.left_at.is_(None)))
+        ).scalars()
+    }
     for mid in model_ids:
-        if await db.get(Model, mid) is None:
+        model = await db.get(Model, mid)
+        if model is None:
             raise HTTPException(404, f"model {mid} not found")
+        if mid not in joined and not model.available:
+            raise HTTPException(422, f"{model.display_name} is unavailable: {model.availability_detail or 'endpoint check failed'}")
     current = {
         sm.model_id: sm
         for sm in (
@@ -104,6 +113,19 @@ async def list_sessions(limit: int = 50, db: AsyncSession = Depends(get_db)) -> 
 async def create_session(body: SessionIn, db: AsyncSession = Depends(get_db)) -> SessionOut:
     from app.config_sync import get_setting
 
+    if body.reuse_empty:
+        latest = (await db.execute(select(Session).order_by(Session.updated_at.desc()).limit(1))).scalar_one_or_none()
+        if latest is not None and not turns.busy(latest.id):
+            has_messages = (await db.execute(select(Message.id).where(Message.session_id == latest.id).limit(1))).first()
+            if not has_messages:
+                latest.title, latest.context_mode = body.title, body.context_mode
+                if body.workspace.kind != "none":
+                    await _apply_workspace(db, latest, body.workspace)
+                if body.model_ids:
+                    await _set_models(db, latest.id, body.model_ids)
+                await db.commit()
+                await db.refresh(latest)
+                return await session_out(db, latest)
     defaults = await get_setting(db, "defaults")
     s = Session(
         title=body.title,
@@ -204,7 +226,7 @@ async def chat(session_id: int, body: ChatIn, db: AsyncSession = Depends(get_db)
     await _get(db, session_id)
     subscription = bus.subscribe(session_id, replay=False, until_turn_end=True)
     try:
-        await turns.start(session_id, body.content, body.recipients)
+        await turns.start(session_id, body.content, body.recipients, body.attachment_ids)
     except TurnError as exc:
         subscription.close()
         raise HTTPException(409, str(exc)) from exc

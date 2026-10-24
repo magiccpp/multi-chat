@@ -80,10 +80,10 @@ async def models_by_name(client) -> dict[str, dict]:
     return {m["model_name"]: m for m in (await client.get("/api/models")).json()}
 
 
-async def chat(client, session_id: int, content: str, recipients=None) -> list[dict]:
+async def chat(client, session_id: int, content: str, recipients=None, attachment_ids=None) -> list[dict]:
     """Send a message and collect all SSE events until turn_end."""
     events = []
-    body = {"content": content, "recipients": recipients}
+    body = {"content": content, "recipients": recipients, "attachment_ids": attachment_ids or []}
     async with client.stream("POST", f"/api/sessions/{session_id}/chat", json=body) as resp:
         assert resp.status_code == 200, await resp.aread()
         async for line in resp.aiter_lines():

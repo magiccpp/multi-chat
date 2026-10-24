@@ -56,10 +56,15 @@ class MockProvider(Provider):
                 if name in offered:
                     calls.append(ToolCall(id=f"mock_{len(messages)}_{i}", name=name, arguments=json.loads(raw or "{}")))
             others = len(re.findall(r"^\[.+? said\]:", user_text, re.MULTILINE))
-            first_line = next((ln for ln in user_text.splitlines() if ln.strip() and not ln.startswith("[")), "")
+            first_line = next((ln for ln in user_text.splitlines() if ln.strip() and not ln.startswith(("[", "<"))), "")
             text = f"[{model}] My take on: {first_line[:160]}"
             if others:
                 text += f" (I read {others} other answer{'s' if others > 1 else ''}.)"
+            if last.images:
+                text += f" (I see {len(last.images)} image{'s' if len(last.images) > 1 else ''}.)"
+            docs = re.findall(r'<attachment name="([^"]+)"', user_text)
+            if docs:
+                text += " (I read " + ", ".join(docs) + ".)"
             if calls:
                 text += f" Calling {', '.join(c.name for c in calls)}."
 

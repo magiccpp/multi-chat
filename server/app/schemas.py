@@ -20,6 +20,7 @@ class EndpointIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     enabled: bool = True
+    auto_models: bool | list[str] = False
 
 
 class EndpointPatch(BaseModel):
@@ -27,6 +28,7 @@ class EndpointPatch(BaseModel):
     base_url: str | None = None
     api_key: str | None = None  # "" clears the key
     enabled: bool | None = None
+    auto_models: bool | list[str] | None = None
 
 
 class EndpointOut(ORM):
@@ -38,6 +40,10 @@ class EndpointOut(ORM):
     api_key_masked: str | None = None
     source: str
     enabled: bool
+    auto_models: bool | list[str] = False
+    status: str = "unchecked"
+    status_detail: str = ""
+    checked_at: datetime | None = None
 
 
 class ModelIn(BaseModel):
@@ -72,7 +78,10 @@ class ModelOut(ORM):
     output_price: float
     enabled: bool
     supports_tools: bool
+    supports_images: bool = True
     source: str
+    available: bool = True
+    availability_detail: str = ""
 
 
 # ---- ssh ------------------------------------------------------------------
@@ -144,6 +153,7 @@ class WorkspaceIn(BaseModel):
 
 
 class SessionIn(BaseModel):
+    reuse_empty: bool = False  # return (and update) the latest session instead, if it has no messages yet
     title: str = "New session"
     context_mode: Literal["shared", "isolated"] = "isolated"
     model_ids: list[int] = Field(default_factory=list)
@@ -202,6 +212,7 @@ class MessageOut(ORM):
     tool_calls: list[dict[str, Any]] | None
     tool_call_id: str | None
     recipients: list[int] | None
+    attachments: list[dict[str, Any]] | None = None
     status: str
     created_at: datetime
     vote: int = 0
@@ -210,6 +221,22 @@ class MessageOut(ORM):
 class ChatIn(BaseModel):
     content: str
     recipients: list[int] | None = None  # model ids; None = all participants (PLAN) / builder (BUILD)
+    attachment_ids: list[int] = Field(default_factory=list)  # from POST /api/sessions/{id}/attachments
+
+
+class AttachmentIn(BaseModel):
+    filename: str
+    mime: str | None = None
+    data_base64: str
+
+
+class AttachmentOut(BaseModel):
+    id: int
+    filename: str
+    mime: str
+    size: int
+    kind: str  # image | document | binary
+    text_chars: int | None = None
 
 
 class ApprovalIn(BaseModel):

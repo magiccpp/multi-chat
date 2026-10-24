@@ -1,8 +1,10 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crypto
+from app import availability, crypto
 from app.db import get_db
 from app.providers.base import ChatMessage, ProviderError, TextDelta
 from app.providers.registry import PRESETS, provider_for
@@ -54,10 +56,12 @@ async def create_endpoint(body: EndpointIn, db: AsyncSession = Depends(get_db)) 
         base_url=body.base_url,
         api_key_enc=crypto.encrypt(body.api_key),
         enabled=body.enabled,
+        auto_models=body.auto_models,
         source="api",
     )
     db.add(row)
     await db.commit()
+    asyncio.create_task(availability.check_all(row.id))
     return endpoint_out(row)
 
 
@@ -73,7 +77,10 @@ async def update_endpoint(endpoint_id: int, body: EndpointPatch, db: AsyncSessio
         row.api_key_enc = crypto.encrypt(body.api_key)
     if body.enabled is not None:
         row.enabled = body.enabled
+    if body.auto_models is not None:
+        row.auto_models = body.auto_models
     await db.commit()
+    asyncio.create_task(availability.check_all(row.id))
     return endpoint_out(row)
 
 
@@ -83,6 +90,18 @@ async def delete_endpoint(endpoint_id: int, db: AsyncSession = Depends(get_db)) 
     _editable(row)
     await db.delete(row)
     await db.commit()
+
+
+@router.post("/check")
+async def check_endpoints() -> list[dict]:
+    """Re-check every endpoint's key and model list now (also runs at start-up and periodically)."""
+    return await availability.check_all()
+
+
+@router.post("/{endpoint_id}/check")
+async def check_endpoint(endpoint_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    await _get(db, endpoint_id)
+    return (await availability.check_all(endpoint_id))[0]
 
 
 @router.post("/{endpoint_id}/test")

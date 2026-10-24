@@ -45,7 +45,10 @@ def to_anthropic_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
         elif m.role == "tool":
             push("user", [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content or "(empty)"}])
         else:
-            push("user", [{"type": "text", "text": m.content or "(empty)"}])
+            blocks = [
+                {"type": "image", "source": {"type": "base64", "media_type": i.mime, "data": i.data_b64}} for i in m.images
+            ]
+            push("user", blocks + [{"type": "text", "text": m.content or "(see attached images)"}])
     return out
 
 
@@ -118,4 +121,7 @@ class AnthropicProvider(Provider):
             page = await self.client.models.list(limit=100)
         except anthropic.AnthropicError as exc:
             raise ProviderError(str(exc)) from exc
-        return [{"id": m.id, "display_name": getattr(m, "display_name", None)} for m in page.data]
+        return [
+            {"id": m.id, "name": getattr(m, "display_name", None) or m.id, "chat": True, "supports_images": True, "supports_tools": True}
+            for m in page.data
+        ]

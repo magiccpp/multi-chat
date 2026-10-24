@@ -11,9 +11,10 @@ from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app import db as dbmod
-from app.agent.context import ContextInput, WorkspaceView, build_messages, system_prompt
+from app.agent.context import AttachmentData, ContextInput, WorkspaceView, build_messages, system_prompt
 from app.agent.events import bus
 from app.agent.tools import ToolContext, execute, tools_for
 from app.config import get_settings
@@ -21,7 +22,7 @@ from app.config_sync import get_setting
 from app.pricing import cost_for
 from app.providers.base import ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
 from app.providers.registry import provider_for
-from app.tables import Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
+from app.tables import Attachment, Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
 from app.workspaces.base import Workspace, WorkspaceError
 from app.workspaces.factory import workspace_for
 
@@ -79,8 +80,20 @@ def message_event(m: Message, **extra: Any) -> dict[str, Any]:
         "tool_calls": m.tool_calls,
         "tool_call_id": m.tool_call_id,
         "recipients": m.recipients,
+        "attachments": m.attachments,
         "status": m.status,
         **extra,
+    }
+
+
+async def load_attachments(db: AsyncSession, messages: list[Message]) -> dict[int, AttachmentData]:
+    ids = [a["id"] for m in messages for a in (m.attachments or [])]
+    if not ids:
+        return {}
+    rows = await db.execute(select(Attachment).where(Attachment.id.in_(ids)).options(undefer(Attachment.data), undefer(Attachment.text)))
+    return {
+        a.id: AttachmentData(a.id, a.filename, a.mime, a.kind, a.text, a.data if a.kind == "image" else None)
+        for a in rows.scalars()
     }
 
 
@@ -92,7 +105,9 @@ class TurnManager:
         task = self.tasks.get(session_id)
         return task is not None and not task.done()
 
-    async def start(self, session_id: int, content: str, recipients: list[int] | None) -> tuple[str, int]:
+    async def start(
+        self, session_id: int, content: str, recipients: list[int] | None, attachment_ids: list[int] | None = None
+    ) -> tuple[str, int]:
         if self.busy(session_id):
             raise TurnError("a turn is already running in this session")
         async with dbmod.sessionmaker()() as db:
@@ -108,6 +123,12 @@ class TurnManager:
                 targets = [m for m in active if recipients is None or m in recipients]
             if not targets:
                 raise TurnError("no participating models; add models to the session first")
+            files = []
+            for aid in attachment_ids or []:
+                a = await db.get(Attachment, aid)
+                if a is None or a.session_id != session_id:
+                    raise TurnError(f"attachment {aid} does not belong to this session")
+                files.append({"id": a.id, "filename": a.filename, "mime": a.mime, "size": a.size, "kind": a.kind})
             turn_id = str(uuid.uuid4())
             user = Message(
                 session_id=session_id,
@@ -117,6 +138,7 @@ class TurnManager:
                 phase=session.phase,
                 content=content,
                 recipients=targets,
+                attachments=files or None,
             )
             db.add(user)
             await db.commit()
@@ -211,6 +233,8 @@ class TurnManager:
             workspace=WorkspaceView(kind=info.kind, label=info.label, os=info.os, shell=info.shell, root=info.root),
             has_tools=has_tools,
             builder_id=session.builder_model_id,
+            attachments=await load_attachments(db, messages),
+            supports_images=model.supports_images,
         )
         return session, system_prompt(ci), build_messages(ci)
 

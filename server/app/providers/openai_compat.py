@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import openai
 from openai import AsyncOpenAI
 
@@ -22,6 +24,10 @@ from app.providers.base import (
     UsageEvent,
     estimate_tokens,
 )
+
+
+# Vendor model ids that are not chat models (embeddings, speech, images, moderation, legacy completions).
+NON_CHAT = re.compile(r"embed|tts|whisper|dall-e|moderation|transcribe|audio|realtime|image|davinci|babbage|search", re.I)
 
 
 def to_openai_messages(system: str, messages: list[ChatMessage]) -> list[dict[str, Any]]:
@@ -45,6 +51,10 @@ def to_openai_messages(system: str, messages: list[ChatMessage]) -> list[dict[st
             out.append(item)
         elif m.role == "tool":
             out.append({"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content})
+        elif m.images:
+            parts: list[dict[str, Any]] = [{"type": "text", "text": m.content or "(see attached images)"}]
+            parts += [{"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{i.data_b64}"}} for i in m.images]
+            out.append({"role": "user", "content": parts})
         else:
             out.append({"role": "user", "content": m.content})
     return out
@@ -154,13 +164,37 @@ class OpenAICompatProvider(Provider):
             raise ProviderError(str(exc)) from exc
         result = []
         for m in page.data:
-            item: dict[str, Any] = {"id": m.id}
-            pricing = (m.model_extra or {}).get("pricing")
+            extra = m.model_extra or {}
+            item: dict[str, Any] = {"id": m.id, "chat": not NON_CHAT.search(m.id)}
+            if extra.get("name"):
+                item["name"] = str(extra["name"])
+            pricing = extra.get("pricing")
             if pricing:  # OpenRouter: USD per token as strings
                 try:
                     item["input_price"] = float(pricing.get("prompt", 0)) * 1_000_000
                     item["output_price"] = float(pricing.get("completion", 0)) * 1_000_000
                 except (TypeError, ValueError):
                     pass
+            arch = extra.get("architecture") or {}
+            if arch:  # OpenRouter: modalities tell us chat/text output and image input
+                item["chat"] = "text" in (arch.get("output_modalities") or ["text"])
+                item["supports_images"] = "image" in (arch.get("input_modalities") or [])
+            if "supported_parameters" in extra:
+                item["supports_tools"] = "tools" in (extra.get("supported_parameters") or [])
             result.append(item)
         return result
+
+    async def check_key(self) -> None:
+        if not self.is_openrouter:
+            return  # /models already needs a valid key on OpenAI-style APIs
+        # OpenRouter's model list is public, so ask for the key's own record instead.
+        url = (self.base_url or "").rstrip("/") + "/key"
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                resp = await c.get(url, headers={"Authorization": f"Bearer {self.api_key or ''}"})
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"cannot reach OpenRouter: {exc}") from exc
+        if resp.status_code in (401, 403):
+            raise ProviderError("OpenRouter rejected the API key")
+        if resp.status_code >= 400:
+            raise ProviderError(f"OpenRouter key check failed: HTTP {resp.status_code}")

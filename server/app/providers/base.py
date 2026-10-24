@@ -30,11 +30,18 @@ class ToolCall:
 
 
 @dataclass
+class ImagePart:
+    mime: str
+    data_b64: str
+
+
+@dataclass
 class ChatMessage:
     role: str  # user | assistant | tool
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
+    images: list[ImagePart] = field(default_factory=list)  # user messages only
 
 
 @dataclass
@@ -82,8 +89,13 @@ class Provider(ABC):
     ) -> AsyncIterator[StreamEvent]: ...
 
     async def list_models(self) -> list[dict[str, Any]]:
-        """Return [{"id": ..., "input_price": ..., "output_price": ...}] if the vendor supports it."""
+        """The vendor's catalog: [{"id", "name"?, "input_price"?, "output_price"?, "supports_images"?,
+        "supports_tools"?, "chat"?}]. Empty if the vendor has no listing."""
         return []
+
+    async def check_key(self) -> None:
+        """Raise ProviderError if the API key is rejected (default: listing models is enough)."""
+        return None
 
 
 def estimate_tokens(text: str) -> int:

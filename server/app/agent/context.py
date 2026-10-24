@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.providers.base import ChatMessage, ToolCall
+import base64
+
+from app.providers.base import ChatMessage, ImagePart, ToolCall
 from app.tables import Message
+
+MAX_IMAGES = 8  # most recent images sent to a model; older ones are mentioned by name only
 
 
 @dataclass
@@ -15,6 +19,16 @@ class WorkspaceView:
     os: str = ""
     shell: str = ""
     root: str = ""
+
+
+@dataclass
+class AttachmentData:
+    id: int
+    filename: str
+    mime: str
+    kind: str  # image | document | binary
+    text: str | None = None
+    data: bytes | None = None
 
 
 @dataclass
@@ -29,6 +43,8 @@ class ContextInput:
     workspace: WorkspaceView = field(default_factory=WorkspaceView)
     has_tools: bool = True
     builder_id: int | None = None
+    attachments: dict[int, AttachmentData] = field(default_factory=dict)
+    supports_images: bool = True
 
 
 def _shell_hint(ws: WorkspaceView) -> str:
@@ -120,16 +136,51 @@ def _addressed_to(m: Message, model_id: int) -> bool:
     return not m.recipients or model_id in m.recipients
 
 
+def _recent_images(ci: ContextInput) -> set[int]:
+    keep: list[int] = []
+    for m in reversed(ci.messages):
+        for a in reversed(m.attachments or []):
+            if a.get("kind") == "image" and len(keep) < MAX_IMAGES:
+                keep.append(a["id"])
+    return set(keep)
+
+
+def _user_message(ci: ContextInput, m: Message, images_ok: set[int], prefix: str = "") -> ChatMessage:
+    """User text plus attached documents (inline) and images (as image parts when the model can see them)."""
+    text = prefix + m.content
+    images: list[ImagePart] = []
+    for meta in m.attachments or []:
+        a = ci.attachments.get(meta["id"])
+        name = meta.get("filename", "file")
+        if a is None:
+            text += f"\n\n[attachment {name} is no longer available]"
+        elif a.kind == "document":
+            text += f'\n\n<attachment name="{name}">\n{a.text or ""}\n</attachment>'
+        elif a.kind == "image":
+            if not ci.supports_images:
+                text += f"\n\n[image {name} omitted: this model cannot read images]"
+            elif prefix:
+                text += f"\n\n[image {name}, sent to another model]"
+            elif a.id not in images_ok or a.data is None:
+                text += f"\n\n[image {name} attached earlier]"
+            else:
+                images.append(ImagePart(a.mime, base64.b64encode(a.data).decode()))
+        else:
+            text += f'\n\n<attachment name="{name}">(binary file of type {a.mime}; its content cannot be shown)</attachment>'
+    return ChatMessage(role="user", content=text, images=images)
+
+
 def build_messages(ci: ContextInput) -> list[ChatMessage]:
     results: dict[str, Message] = {m.tool_call_id: m for m in ci.messages if m.role == "tool" and m.tool_call_id}
+    images_ok = _recent_images(ci)
     out: list[ChatMessage] = []
     for m in ci.messages:
         if m.role == "user":
             if _addressed_to(m, ci.model_id):
-                out.append(ChatMessage(role="user", content=m.content))
+                out.append(_user_message(ci, m, images_ok))
             elif ci.context_mode == "shared":
                 to = ", ".join(ci.names.get(r, "?") for r in m.recipients or [])
-                out.append(ChatMessage(role="user", content=f"[User, to {to}]: {m.content}"))
+                out.append(_user_message(ci, m, images_ok, prefix=f"[User, to {to}]: "))
         elif m.role == "assistant" and m.model_id == ci.model_id:
             calls = [ToolCall.from_json(c) for c in (m.tool_calls or []) if not c.get("external")]
             if not ci.has_tools and calls:
@@ -157,7 +208,8 @@ def _merge_users(messages: list[ChatMessage]) -> list[ChatMessage]:
     merged: list[ChatMessage] = []
     for m in messages:
         if merged and m.role == "user" and merged[-1].role == "user":
-            merged[-1] = ChatMessage(role="user", content=merged[-1].content + "\n\n" + m.content)
+            prev = merged[-1]
+            merged[-1] = ChatMessage(role="user", content=prev.content + "\n\n" + m.content, images=prev.images + m.images)
         else:
             merged.append(m)
     return merged

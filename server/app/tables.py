@@ -8,6 +8,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     SmallInteger,
     String,
     Text,
@@ -42,6 +43,12 @@ class Endpoint(Base):
     # config (from config.yaml, read-only through the API) | api
     source: Mapped[str] = mapped_column(String(16), default="api")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Import the vendor's model catalog automatically: false, true (all chat models) or a list of glob patterns.
+    auto_models: Mapped[Any] = mapped_column(JsonType, default=False)
+    # Result of the last key/model check: unchecked | ok | no_key | error
+    status: Mapped[str] = mapped_column(String(16), default="unchecked")
+    status_detail: Mapped[str] = mapped_column(Text, default="")
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
 
 
@@ -58,7 +65,11 @@ class Model(Base):
     output_price: Mapped[float] = mapped_column(Float, default=0.0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_tools: Mapped[bool] = mapped_column(Boolean, default=True)
-    source: Mapped[str] = mapped_column(String(16), default="api")
+    supports_images: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(16), default="api")  # config | api | catalog
+    # Set by the endpoint check: can this model be used right now, and if not, why.
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+    availability_detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = _now()
 
 
@@ -139,7 +150,25 @@ class Message(Base):
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JsonType)
     tool_call_id: Mapped[str | None] = mapped_column(String(100))
     recipients: Mapped[list[int] | None] = mapped_column(JsonType)
+    # [{id, filename, mime, size, kind}] for user messages with files
+    attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JsonType)
     status: Mapped[str] = mapped_column(String(16), default="complete")  # streaming | complete | error | cancelled
+    created_at: Mapped[datetime] = _now()
+
+
+class Attachment(Base):
+    """A file the user attached to a message (stored in the database so history keeps it)."""
+
+    __tablename__ = "attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(300))
+    mime: Mapped[str] = mapped_column(String(120))
+    size: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(16))  # image | document | binary
+    data: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    text: Mapped[str | None] = mapped_column(Text, deferred=True)  # extracted text for documents
     created_at: Mapped[datetime] = _now()
 
 

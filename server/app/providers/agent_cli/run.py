@@ -49,7 +49,7 @@ async def _new_message(session_id: int, turn_id: str, model: Model, phase: str, 
 
 
 async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoint: Endpoint, workspace: Workspace) -> None:
-    from app.agent.loop import message_event, turns
+    from app.agent.loop import load_attachments, message_event, turns
 
     driver = DRIVERS.get(endpoint.driver or "")
     label = LABELS.get(endpoint.driver or "", endpoint.name)
@@ -96,6 +96,8 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
             workspace=WorkspaceView(kind=info.kind, label=info.label, os=info.os, shell=info.shell, root=info.root),
             has_tools=True,
             builder_id=session.builder_model_id,
+            attachments=await load_attachments(db, subset),
+            supports_images=False,  # CLI prompts are text; images are mentioned by name
         )
         history = [m for m in build_messages(ci) if not (resume_id and m.role == "assistant")]
         if resume_id:

@@ -94,6 +94,7 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
             row.api_key_enc = crypto.encrypt(key)
         row.source = "config"
         row.enabled = ep.get("enabled", True)
+        row.auto_models = ep.get("auto_models", False)
         await db.flush()
         counts["endpoints"] += 1
 

@@ -95,6 +95,15 @@ class RunnerConnection:
                 future.set_exception(RunnerOffline("runner disconnected"))
 
 
+async def _refresh_clis() -> None:
+    from app.availability import refresh_agent_clis
+
+    try:
+        await refresh_agent_clis()
+    except Exception:  # noqa: BLE001
+        log.exception("agent CLI availability refresh failed")
+
+
 class RunnerHub:
     def __init__(self) -> None:
         self.connections: dict[int, RunnerConnection] = {}
@@ -139,6 +148,7 @@ class RunnerHub:
         conn = RunnerConnection(ws, runner_id, hello)
         self.connections[runner_id] = conn
         await conn.send({"type": "welcome", "runner_id": runner_id})
+        asyncio.create_task(_refresh_clis())
         log.info("runner %s (%s) connected", hello["name"], runner_id)
         try:
             while True:
@@ -157,6 +167,7 @@ class RunnerHub:
                     row.last_seen = datetime.now(UTC)
                     await db.commit()
             log.info("runner %s disconnected", hello["name"])
+            asyncio.create_task(_refresh_clis())
 
 
 hub = RunnerHub()
