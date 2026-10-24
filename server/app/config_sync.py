@@ -128,8 +128,10 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
         await db.flush()
         counts["endpoints"] += 1
 
+        listed: set[str] = set()
         for m in ep.get("models") or []:
             mname = m["name"] if isinstance(m, dict) else str(m)
+            listed.add(mname)
             spec = m if isinstance(m, dict) else {}
             model = (
                 await db.execute(select(Model).where(Model.endpoint_id == row.id, Model.model_name == mname))
@@ -145,6 +147,11 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
             model.enabled = bool(spec.get("enabled", True))
             model.source = "config"
             counts["models"] += 1
+        # Models no longer listed in the file become vendor-list entries (kept for history and stats): with no
+        # `models:` at all the endpoint fetches its model list from the vendor.
+        for model in (await db.execute(select(Model).where(Model.endpoint_id == row.id, Model.source == "config"))).scalars():
+            if model.model_name not in listed:
+                model.source = "catalog"
 
     # Endpoints removed from the file are disabled, not deleted, so history and stats survive.
     for row in (await db.execute(select(Endpoint).where(Endpoint.source == "config"))).scalars():

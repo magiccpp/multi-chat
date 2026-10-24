@@ -115,3 +115,32 @@ async def test_openrouter_endpoint_imports_by_default(client):
                                                     "base_url": "https://openrouter.ai/api/v1"})).json()
     assert ep["auto_models"] is True
     await client.patch(f"/api/endpoints/{ep['id']}", json={"enabled": False})
+
+
+async def test_config_without_models_fetches_vendor_list(client, vendor_url):
+    import yaml
+
+    from app import db as dbmod
+    from app.config import get_settings
+    from app.config_sync import sync_config
+
+    base = yaml.safe_load(get_settings().config_file.read_text())
+
+    async def sync(models):
+        ep = {"name": "dyn", "kind": "openai_compatible", "base_url": vendor_url, "api_key": "right-key"}
+        if models is not None:
+            ep["models"] = models
+        async with dbmod.sessionmaker()() as db:
+            await sync_config(db, {**base, "endpoints": [*base["endpoints"], ep]})
+        eid = next(e["id"] for e in (await client.get("/api/endpoints")).json() if e["name"] == "dyn")
+        assert (await client.post(f"/api/endpoints/{eid}/check")).json()["status"] == "ok"
+        return await models_of(client, eid)
+
+    # one model listed: only that one
+    assert set(await sync([{"name": "good-model", "display_name": "Good"}])) == {"good-model"}
+    # models removed from the file (key omitted): the vendor's list is fetched
+    models = await sync(None)
+    assert {"good-model", "vision-model"} <= set(models)
+    assert models["good-model"]["source"] == "catalog" and all(m["available"] for m in models.values())
+    async with dbmod.sessionmaker()() as db:
+        await sync_config(db, base)  # restore: "dyn" disabled again

@@ -11,6 +11,8 @@
 #     a list of glob patterns imports only matching ids, e.g. ["openai/*", "anthropic/claude-*"].
 #     Models listed under `models:` keep their own display name, color and prices. OpenRouter endpoints, and endpoints
 #     with no `models:`, import automatically unless auto_models is false.
+#   - Leave out `models:` (or use `models: []`) and the server fetches the endpoint's model list from the vendor;
+#     list models only to pick a subset or set your own names, colors and prices.
 #   - OPENROUTER_API_KEY in .env is enough: the server adds an `openrouter` endpoint if this file has none.
 
 endpoints:
@@ -35,15 +37,14 @@ endpoints:
     kind: openai_compatible
     base_url: https://api.deepseek.com
     api_key: ${DEEPSEEK_API_KEY}
-    models:
-      - {name: deepseek-chat, display_name: DeepSeek Chat, color: "#2563eb", input_price: 0, output_price: 0}
+    # no models: listed -> the server fetches DeepSeek's model list
 
   - name: openrouter
     kind: openai_compatible
     base_url: https://openrouter.ai/api/v1
     api_key: ${OPENROUTER_API_KEY}
-    auto_models: true    # every OpenRouter chat model, with prices; or e.g. ["openai/*", "deepseek/*", "qwen/*"]
-    models: []
+    # no models: listed -> every OpenRouter chat model your key can use, with prices
+    # auto_models: ["openai/*", "deepseek/*", "qwen/*"]   # or only these
 
   # GitHub Models: OpenAI-compatible, token needs the `models:read` permission.
   # - name: github-models
