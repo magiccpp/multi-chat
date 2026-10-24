@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from rich.console import Group, RenderableType
@@ -13,6 +14,7 @@ from rich.text import Text
 
 from multichat_client.state import MessageView, SessionState
 
+BR = re.compile(r"<br\s*/?>", re.IGNORECASE)  # models put <br> in table cells
 VOTE_MARK = {1: ("▲", "green"), -1: ("▼", "red")}
 
 
@@ -99,7 +101,7 @@ def tool_lines(st: SessionState, m: MessageView, *, expanded: bool) -> list[Rend
 def message_body(st: SessionState, m: MessageView, *, expanded: bool = False) -> RenderableType:
     parts: list[RenderableType] = []
     if m.content.strip():
-        parts.append(Markdown(m.content) if m.role == "assistant" else Text(m.content))
+        parts.append(Markdown(BR.sub(" · ", m.content)) if m.role == "assistant" else Text(m.content))
     elif m.role == "assistant" and m.status == "streaming" and not m.tool_calls:
         parts.append(Text("thinking…", style="dim italic"))
     parts.extend(tool_lines(st, m, expanded=expanded))

@@ -53,6 +53,15 @@ def load_config(path: Path) -> dict[str, Any]:
     return expand_env(data)
 
 
+def _stored(value: str | None) -> str | None:
+    """Decrypt a stored secret; one encrypted with a lost/changed key counts as different (config re-encrypts it)."""
+    try:
+        return crypto.decrypt(value)
+    except RuntimeError:
+        log.warning("a stored secret could not be decrypted (MULTICHAT_SECRET_KEY changed?); re-encrypting from config")
+        return None
+
+
 async def set_setting(db: AsyncSession, key: str, value: dict[str, Any]) -> None:
     row = await db.get(Setting, key)
     if row is None:
@@ -81,7 +90,7 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
         row.driver = ep.get("driver")
         row.base_url = ep.get("base_url")
         key = ep.get("api_key") or None
-        if key is None or crypto.decrypt(row.api_key_enc) != key:
+        if key is None or _stored(row.api_key_enc) != key:
             row.api_key_enc = crypto.encrypt(key)
         row.source = "config"
         row.enabled = ep.get("enabled", True)

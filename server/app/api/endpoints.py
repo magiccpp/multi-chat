@@ -121,10 +121,11 @@ async def available_models(endpoint_id: int, db: AsyncSession = Depends(get_db))
 @router.post("/{endpoint_id}/import-models", response_model=list[ModelOut])
 async def import_models(endpoint_id: int, ids: list[str], db: AsyncSession = Depends(get_db)) -> list[ModelOut]:
     """Add the given vendor model ids (with vendor pricing when the vendor reports it)."""
-    from app.api.models import model_out
+    from app.api.models import PALETTE, model_out
 
     row = await _get(db, endpoint_id)
     catalog = {m["id"]: m for m in await available_models(endpoint_id, db)}
+    taken = len((await db.execute(select(Model.id))).all())
     added = []
     for model_id in ids:
         existing = (
@@ -137,6 +138,7 @@ async def import_models(endpoint_id: int, ids: list[str], db: AsyncSession = Dep
             endpoint_id=row.id,
             model_name=model_id,
             display_name=info.get("display_name") or model_id.split("/")[-1],
+            color=PALETTE[(taken + len(added)) % len(PALETTE)],
             input_price=info.get("input_price", 0.0),
             output_price=info.get("output_price", 0.0),
             source="api",

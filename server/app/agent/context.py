@@ -65,7 +65,8 @@ def system_prompt(ci: ContextInput) -> str:
     if ci.context_mode == "shared":
         parts.append(
             'Context: shared. You see the other models\' replies as "[Name said]: ...". Build on good ideas, point '
-            "out mistakes, and avoid repeating what was already said."
+            "out mistakes, and avoid repeating what was already said. Write only your own reply: do not copy the "
+            'other replies or start with a "[Name said]:" prefix.'
         )
     else:
         parts.append("Context: isolated. Answer independently; you cannot see the other models' replies.")

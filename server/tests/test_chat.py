@@ -102,3 +102,19 @@ async def test_join_and_leave_mid_session(client):
     s = (await client.put(f"/api/sessions/{s['id']}/models", json={"model_ids": [g]})).json()
     assert [r["model_id"] for r in finished(await chat(client, s["id"], "Third"))] == [g]
     assert b not in [p["model_id"] for p in s["participants"]]
+
+
+async def test_config_sync_recovers_from_changed_secret_key(client):
+    from app import db as dbmod
+    from app.config_sync import load_config, sync_config
+    from app.config import get_settings
+    from app.tables import Endpoint
+    from sqlalchemy import select
+
+    async with dbmod.sessionmaker()() as db:
+        row = (await db.execute(select(Endpoint).where(Endpoint.name == "mock"))).scalar_one()
+        row.api_key_enc = "gAAAAAB-not-decryptable-with-this-key"
+        await db.commit()
+        await sync_config(db, load_config(get_settings().config_file))
+    masked = next(e for e in (await client.get("/api/endpoints")).json() if e["name"] == "mock")["api_key_masked"]
+    assert masked == "sk-…1234"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -24,6 +25,9 @@ from PySide6.QtWidgets import (
 from multichat_client.state import MessageView
 from multichat_desktop.controller import Controller
 from multichat_desktop.theme import colors
+
+
+BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
 def args_summary(arguments: dict[str, Any]) -> str:
@@ -124,6 +128,8 @@ class MessageCard(QFrame):
         self.setStyleSheet(f"QFrame#card {{ border-left: 4px solid {color if is_reply else c['border']}; }}")
 
         text = m.content or ("_thinking…_" if m.status == "streaming" and not m.tool_calls else "")
+        if is_reply:
+            text = BR.sub(" · ", text)  # models put <br> in table cells; Qt's Markdown drops raw HTML
         # User prompts are shown verbatim; model replies are Markdown.
         self.body.setTextFormat(Qt.TextFormat.MarkdownText if is_reply else Qt.TextFormat.PlainText)
         self.body.setText(text)
