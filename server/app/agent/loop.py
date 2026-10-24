@@ -172,11 +172,11 @@ class TurnManager:
     async def _run(self, session_id: int, turn_id: str, phase: str, mode: str, targets: list[int]) -> None:
         status = "complete"
         try:
-            if phase == "plan" and mode == "isolated":
-                await asyncio.gather(*(self._participant(session_id, turn_id, m) for m in targets))
-            else:
-                for model_id in targets:
+            if mode == "relay" and phase == "plan":
+                for model_id in targets:  # each sees the replies before it
                     await self._participant(session_id, turn_id, model_id)
+            else:
+                await asyncio.gather(*(self._participant(session_id, turn_id, m) for m in targets))
         except asyncio.CancelledError:
             status = "cancelled"
             raise
@@ -211,7 +211,7 @@ class TurnManager:
             await workspace.close()
 
     async def _context(
-        self, db: AsyncSession, session_id: int, model: Model, workspace: Workspace, has_tools: bool
+        self, db: AsyncSession, session_id: int, model: Model, workspace: Workspace, has_tools: bool, turn_id: str = ""
     ) -> tuple[Session, str, list]:
         session = await db.get(Session, session_id)
         await db.refresh(session)
@@ -237,6 +237,7 @@ class TurnManager:
             builder_id=session.builder_model_id,
             attachments=await load_attachments(db, messages),
             supports_images=model.supports_images,
+            turn_id=turn_id,
         )
         return session, system_prompt(ci), build_messages(ci)
 
@@ -260,7 +261,7 @@ class TurnManager:
                     if model.supports_tools
                     else []
                 )
-                session, system, history = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools)
+                session, system, history = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools, turn_id)
                 msg = Message(
                     session_id=session_id,
                     seq=await next_seq(db, session_id),

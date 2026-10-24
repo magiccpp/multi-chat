@@ -106,6 +106,13 @@ async def test_tui_plan_vote_build(server, client, tmp_path):
         await send(pilot, app, "/revert")
         await until(pilot, lambda: (root / "app.py").read_text() == "print('v1')\n")
 
+        await send(pilot, app, "/cost")
+        await until(pilot, lambda: isinstance(app.screen, TextScreen))
+        await pilot.pause(0.2)
+        app.save_screenshot(str(SHOTS / "tui-cost.svg"))
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+
         await send(pilot, app, "/stats")
         await until(pilot, lambda: isinstance(app.screen, TextScreen))
         await pilot.pause(0.2)
@@ -150,7 +157,7 @@ async def test_tui_models_new_session_and_attach(server, client, tmp_path):
         lst = app.screen.query_one(SelectionList)
         options = {lst.get_option_at_index(i).value: lst.get_option_at_index(i) for i in range(lst.option_count)}
         assert options[gone["id"]].disabled and not options[models["mock-beta"]["id"]].disabled
-        app.screen.query_one(Input).value = "beta"
+        app.screen.query_one(Input).value = "mock-beta"
         await pilot.pause(0.1)
         assert [lst.get_option_at_index(i).value for i in range(lst.option_count)] == [models["mock-beta"]["id"]]
         await pilot.press("escape")

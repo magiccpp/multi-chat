@@ -36,7 +36,7 @@ class ContextInput:
     model_id: int
     model_name: str
     phase: str  # plan | build
-    context_mode: str  # shared | isolated
+    context_mode: str  # isolated | shared (parallel, sees earlier turns) | relay (one after another)
     messages: list[Message]
     names: dict[int, str]  # model id -> display name
     votes: dict[int, int] = field(default_factory=dict)  # message id -> +1/-1
@@ -45,6 +45,10 @@ class ContextInput:
     builder_id: int | None = None
     attachments: dict[int, AttachmentData] = field(default_factory=dict)
     supports_images: bool = True
+    turn_id: str = ""  # the turn being answered; in shared mode its other replies are still being written
+
+
+SEES_OTHERS = ("shared", "relay")
 
 
 def _shell_hint(ws: WorkspaceView) -> str:
@@ -82,10 +86,15 @@ def system_prompt(ci: ContextInput) -> str:
             "you edit, make focused changes, run tests or commands to verify, and finish with a short summary of "
             "what changed and how it was verified."
         )
-    if ci.context_mode == "shared":
+    if ci.context_mode in SEES_OTHERS:
+        when = (
+            "The others answer this message at the same time as you; you see their replies from earlier turns."
+            if ci.context_mode == "shared"
+            else "The models answer one after another; you see the replies given before yours."
+        )
         parts.append(
-            'Context: shared. You see the other models\' replies as "[Name said]: ...". Build on good ideas, point '
-            "out mistakes, and avoid repeating what was already said. Write only your own reply: do not copy the "
+            f'Context: shared. You see the other models\' replies as "[Name said]: ...". {when} Build on good ideas, '
+            "point out mistakes, and avoid repeating what was already said. Write only your own reply: do not copy the "
             'other replies or start with a "[Name said]:" prefix.'
         )
     else:
@@ -182,7 +191,7 @@ def build_messages(ci: ContextInput) -> list[ChatMessage]:
         if m.role == "user":
             if _addressed_to(m, ci.model_id):
                 out.append(_user_message(ci, m, images_ok))
-            elif ci.context_mode == "shared":
+            elif ci.context_mode in SEES_OTHERS:
                 to = ", ".join(ci.names.get(r, "?") for r in m.recipients or [])
                 out.append(_user_message(ci, m, images_ok, prefix=f"[User, to {to}]: "))
         elif m.role == "assistant" and m.model_id == ci.model_id:
@@ -202,7 +211,9 @@ def build_messages(ci: ContextInput) -> list[ChatMessage]:
                         content=result.content if result else "(no result: the call was cancelled)",
                     )
                 )
-        elif m.role == "assistant" and ci.context_mode == "shared" and m.content.strip():
+        elif m.role == "assistant" and ci.context_mode in SEES_OTHERS and m.content.strip():
+            if ci.context_mode == "shared" and ci.turn_id and m.turn_id == ci.turn_id:
+                continue  # answered in parallel: still being written
             name = ci.names.get(m.model_id or 0, "Another model")
             out.append(ChatMessage(role="user", content=f"[{name} said]: {m.content.strip()}"))
     return _merge_users(out)

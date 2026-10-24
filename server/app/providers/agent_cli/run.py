@@ -98,13 +98,16 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
             builder_id=session.builder_model_id,
             attachments=await load_attachments(db, subset),
             supports_images=False,  # CLI prompts are text; images are mentioned by name
+            turn_id=turn_id,
         )
         history = [m for m in build_messages(ci) if not (resume_id and m.role == "assistant")]
         if resume_id:
             prompt = PHASE_NOTE[phase] + "\n\n" + render_transcript(None, history)
         else:
             prompt = render_transcript(system_prompt(ci), history)
-        last_seen = messages[-1].id if messages else 0
+        # Other models' replies to this turn are still being written (shared mode runs in parallel): leave them unseen
+        # so the next prompt includes them.
+        last_seen = max((m.id for m in messages if m.turn_id != turn_id or m.role == "user"), default=0)
         approve_edits, approve_commands = session.approve_edits, session.approve_commands
         prev_total = state.last_total_cost or 0.0
         await db.commit()

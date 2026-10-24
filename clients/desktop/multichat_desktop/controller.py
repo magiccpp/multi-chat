@@ -236,5 +236,15 @@ class Controller(QObject):
     async def shutdown(self) -> None:
         if self._events_task:
             self._events_task.cancel()
-        await asyncio.to_thread(self.stop_runner)
-        await self.client.close()
+        # While Qt is quitting, qasync may no longer count as a running asyncio loop, so asyncio.to_thread() and
+        # httpx's aclose() can raise "no running event loop". Stop the runner thread directly (it joins with a
+        # timeout) and close the client only if the loop still runs; the process is exiting anyway.
+        self.stop_runner()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            await self.client.close()
+        except RuntimeError:
+            pass

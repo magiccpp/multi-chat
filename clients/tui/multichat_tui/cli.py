@@ -264,7 +264,8 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="send one prompt and print the replies")
     r.add_argument("prompt")
     r.add_argument("--models", help="comma separated model names")
-    r.add_argument("--mode", choices=["shared", "isolated"], default="isolated")
+    r.add_argument("--mode", choices=["isolated", "shared", "relay"], default="isolated",
+                   help="isolated/shared answer in parallel (shared: models see earlier replies); relay: one after another")
     r.add_argument("--title")
     r.add_argument("--folder", help="ssh:<connection>:<path> or runner:<name>:<path>")
     r.add_argument("--json", action="store_true")

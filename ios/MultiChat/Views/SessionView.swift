@@ -104,6 +104,7 @@ struct SessionView: View {
             Picker("Context", selection: Binding(get: { model.session?.contextMode ?? "isolated" }, set: { model.setMode($0) })) {
                 Text("Isolated").tag("isolated")
                 Text("Shared").tag("shared")
+                Text("Relay").tag("relay")
             }
             Menu("Builder") {
                 ForEach(model.state.participants, id: \.modelId) { p in

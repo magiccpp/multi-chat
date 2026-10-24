@@ -125,7 +125,7 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         theme.apply(QApplication.instance())
         api = MultiChatClient(server, TOKEN)
         models = {m["model_name"]: m["id"] for m in await api.models()}
-        s = await api.create_session("Token refresh bug", [models["mock-alpha"], models["mock-beta"], models["mock-gamma"]], "shared")
+        s = await api.create_session("Token refresh bug", [models["mock-alpha"], models["mock-beta"], models["mock-gamma"]], "relay")
         ctl = Controller(api)
         win = MainWindow(ctl)
         win.resize(1500, 920)
@@ -160,6 +160,19 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
             assert "tok · $" in win.chat.cards[r.id].title.text()
         assert all("$" in win.chat.tabs.tabText(i) for i in range(win.chat.tabs.count()))
         win.grab().save(str(SHOTS / "desktop-plan.png"))
+        # Details…: per-model breakdown
+        win.chat.show_cost_details()
+        await until(lambda: getattr(win.chat, "cost_dialog", None) is not None)
+        table = win.chat.cost_dialog.table
+        assert table.rowCount() == 4  # three models + total
+        names = [table.item(r, 0).text() for r in range(3)]
+        assert {n.lstrip("● ") for n in names} == {"GPT-ish", "Claude-ish", "DeepSeek-ish"}
+        assert all(table.item(r, 1).text() == "1" for r in range(3))  # one reply each
+        assert table.item(3, 8).text() == f"${ctl.st.total_cost():.4f}"
+        assert all(table.item(r, 6).text().startswith("$") and table.item(r, 7).text().startswith("$") for r in range(3))
+        await asyncio.sleep(0.2)
+        win.chat.cost_dialog.grab().save(str(SHOTS / "desktop-cost-details.png"))
+        win.chat.cost_dialog.close()
 
         # vote with the card buttons
         win.chat.cards[replies[1].id].up.click()

@@ -222,3 +222,26 @@ def test_build_handoff_includes_plan_and_votes():
     assert "Phase: BUILD" in prompt and "#3 B ▲ upvoted" in prompt and "B answer" in prompt
     assert "PowerShell" in prompt and "winget" in prompt
     assert "upvoted #3 (B)" in prompt and "downvoted #5 (B)" in prompt
+
+
+def test_shared_mode_hides_replies_still_being_written():
+    from app.agent.context import ContextInput, build_messages
+
+    history = [
+        _msg(1, "user", content="q1", recipients=[1, 2]),
+        _msg(2, "assistant", 1, "A answer 1"),
+        _msg(3, "assistant", 2, "B answer 1"),
+        _msg(4, "user", content="q2", recipients=[1, 2]),
+        _msg(5, "assistant", 2, "B half-written answer 2"),
+    ]
+    for m, turn in zip(history, ["t1", "t1", "t1", "t2", "t2"]):
+        m.turn_id = turn
+
+    def seen(mode):
+        ci = ContextInput(model_id=1, model_name="A", phase="plan", context_mode=mode, messages=history,
+                          names={1: "A", 2: "B"}, turn_id="t2")
+        return "\n".join(m.content or "" for m in build_messages(ci))
+
+    assert "B answer 1" in seen("shared") and "half-written" not in seen("shared")  # parallel: earlier turns only
+    assert "half-written" in seen("relay")  # one after another: replies before yours
+    assert "B answer" not in seen("isolated")

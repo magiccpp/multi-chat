@@ -98,7 +98,7 @@ struct NewSessionSheet: View {
                 Section {
                     Toggle("Models see each other's replies", isOn: $shared)
                 } footer: {
-                    Text(shared ? "Shared: models answer one after another and can build on earlier replies."
+                    Text(shared ? "Shared: models answer in parallel and see each other's earlier replies (Relay, in the session menu, makes them take turns)."
                                 : "Isolated: models answer independently, in parallel.")
                 }
                 ModelPicker(models: app.models, selected: $selected, query: query)

@@ -155,7 +155,7 @@ class WorkspaceIn(BaseModel):
 class SessionIn(BaseModel):
     reuse_empty: bool = False  # return (and update) the latest session instead, if it has no messages yet
     title: str = "New session"
-    context_mode: Literal["shared", "isolated"] = "isolated"
+    context_mode: Literal["shared", "isolated", "relay"] = "isolated"
     model_ids: list[int] = Field(default_factory=list)
     workspace: WorkspaceIn = Field(default_factory=WorkspaceIn)
 
@@ -163,7 +163,7 @@ class SessionIn(BaseModel):
 class SessionPatch(BaseModel):
     title: str | None = None
     phase: Literal["plan", "build"] | None = None
-    context_mode: Literal["shared", "isolated"] | None = None
+    context_mode: Literal["shared", "isolated", "relay"] | None = None
     builder_model_id: int | None = None
     approve_edits: Literal["auto", "ask"] | None = None
     approve_commands: Literal["auto", "ask"] | None = None
@@ -268,6 +268,12 @@ class UsageRow(BaseModel):
     output_tokens: int
     cost: float
     estimated: bool
+    replies: int = 0
+    input_price: float = 0.0  # USD per 1M tokens
+    output_price: float = 0.0
+    price_known: bool = True  # False: no price configured or found, so the cost shows as $0
+    input_cost: float | None = None  # split of `cost`, from the prices
+    output_cost: float | None = None
 
 
 class FileChangeOut(ORM):

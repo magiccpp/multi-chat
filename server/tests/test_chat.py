@@ -1,3 +1,5 @@
+import re
+
 import httpx
 
 from tests.conftest import chat, finished, models_by_name
@@ -46,10 +48,29 @@ async def test_isolated_plan_fans_out_in_parallel(client):
     assert [r["model_id"] for r in finished(events)] == [ids[0]]
 
 
-async def test_shared_mode_models_see_each_other(client):
+async def test_shared_mode_runs_in_parallel_and_sees_earlier_turns(client):
+    # a slow mock so the overlap is visible (the default test mock answers instantly)
+    ep = (await client.post("/api/endpoints", json={"name": "slow-mock", "kind": "mock", "base_url": "mock://local?delay=0.03"})).json()
+    ids = [(await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": f"slow-{n}", "display_name": n})).json()["id"]
+           for n in ("alpha", "beta", "gamma")]
+    s = (await client.post("/api/sessions", json={"title": "shared", "context_mode": "shared", "model_ids": ids})).json()
+    events = await chat(client, s["id"], "Design a cache layer")
+    starts = [i for i, e in enumerate(events) if e["type"] == "message_start" and e["message"]["role"] == "assistant"]
+    first_end = next(i for i, e in enumerate(events) if e["type"] == "message_end")
+    assert len(starts) == 3 and max(starts) < first_end  # all three started before any finished: parallel
+    replies = finished(events)
+    assert all("other answer" not in r["content"] for r in replies), [r["content"] for r in replies]  # same-turn replies are still being written
+    replies = finished(await chat(client, s["id"], "Which design is best?"))
+    # every model now sees last turn's replies; the mock counts those after its own reply, so the
+    # counts are 0, 1 and 2 depending on the order the turn-1 replies were created
+    counts = sorted(int(m.group(1)) if (m := re.search(r"I read (\d) other", r["content"])) else 0 for r in replies)
+    assert counts == [0, 1, 2], [r["content"] for r in replies]
+
+
+async def test_relay_mode_answers_one_after_another(client):
     models = await models_by_name(client)
     ids = [models[n]["id"] for n in ("mock-alpha", "mock-beta", "mock-gamma")]
-    s = (await client.post("/api/sessions", json={"title": "shared", "context_mode": "shared", "model_ids": ids})).json()
+    s = (await client.post("/api/sessions", json={"title": "relay", "context_mode": "relay", "model_ids": ids})).json()
     replies = finished(await chat(client, s["id"], "Design a cache layer"))
     assert [r["model_id"] for r in replies] == ids  # sequential in session order
     assert "other answer" not in replies[0]["content"]
