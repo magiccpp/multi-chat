@@ -75,11 +75,40 @@ async def get_setting(db: AsyncSession, key: str) -> dict[str, Any]:
     return dict(row.value) if row else {}
 
 
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+
+
+def is_openrouter(base_url: str | None) -> bool:
+    return "openrouter.ai" in (base_url or "")
+
+
+def with_builtin_endpoints(endpoints: list[dict[str, Any]], env: dict[str, str], skip_openrouter: bool = False) -> list[dict[str, Any]]:
+    """OpenRouter is always offered when OPENROUTER_API_KEY is set, even if config.yaml doesn't mention it (or was
+    copied from an older example). A config entry for OpenRouter without a key gets the one from the environment."""
+    key = (env.get("OPENROUTER_API_KEY") or "").strip()
+    out = []
+    for ep in endpoints:
+        if key and is_openrouter(ep.get("base_url")) and not ep.get("api_key"):
+            ep = {**ep, "api_key": key}
+        out.append(ep)
+    if key and not skip_openrouter and not any(is_openrouter(ep.get("base_url")) for ep in out):
+        names = {ep.get("name") for ep in out}
+        name = "openrouter" if "openrouter" not in names else "openrouter-env"
+        out.append({"name": name, "kind": "openai_compatible", "base_url": OPENROUTER_URL, "api_key": key,
+                    "auto_models": True, "models": []})
+    return out
+
+
 async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int]:
     counts = {"endpoints": 0, "models": 0, "ssh_connections": 0}
     seen_endpoints: set[str] = set()
+    # an OpenRouter endpoint added from a client already covers the built-in one
+    added_in_app = (await db.execute(
+        select(Endpoint.id).where(Endpoint.source == "api", Endpoint.enabled.is_(True), Endpoint.base_url.like("%openrouter.ai%"))
+    )).first() is not None
+    endpoints = with_builtin_endpoints(list(config.get("endpoints") or []), dict(os.environ), skip_openrouter=added_in_app)
 
-    for ep in config.get("endpoints") or []:
+    for ep in endpoints:
         name = ep["name"]
         seen_endpoints.add(name)
         row = (await db.execute(select(Endpoint).where(Endpoint.name == name))).scalar_one_or_none()
@@ -94,7 +123,8 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
             row.api_key_enc = crypto.encrypt(key)
         row.source = "config"
         row.enabled = ep.get("enabled", True)
-        row.auto_models = ep.get("auto_models", False)
+        # OpenRouter imports its whole catalog unless told otherwise; see also availability.import_patterns()
+        row.auto_models = ep.get("auto_models", is_openrouter(row.base_url))
         await db.flush()
         counts["endpoints"] += 1
 

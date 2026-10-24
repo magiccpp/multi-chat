@@ -167,7 +167,7 @@ class ModelsDialog(QDialog):
                     else:
                         item.setText(0, f"{m['display_name']}  (unavailable)")
                 group.addChild(item)
-            group.setExpanded(len(models) <= 40 or any(m["id"] in checked for m in models))
+            group.setExpanded(True)
         self.tree.resizeColumnToContents(0)
         self.tree.blockSignals(False)
         self._apply_filter()

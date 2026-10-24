@@ -20,7 +20,7 @@ class EndpointIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     enabled: bool = True
-    auto_models: bool | list[str] = False
+    auto_models: bool | list[str] | None = None  # default: True for OpenRouter
 
 
 class EndpointPatch(BaseModel):

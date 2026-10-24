@@ -21,16 +21,10 @@ million tokens).
    ```
    OPENROUTER_API_KEY=sk-or-v1-…
    ```
-4. **Models**: the example `config.yaml` has `auto_models: true` for OpenRouter, so the server imports every
-   OpenRouter chat model (with prices) once it has checked the key — nothing else to do. To show only a few, either
-   use patterns (`auto_models: ["openai/*", "qwen/*", "deepseek/*"]`) or set `auto_models: false` and list them:
-   ```yaml
-       models:
-         - {name: openai/gpt-oss-20b,             display_name: GPT-OSS 20B,       color: "#10a37f", input_price: 0.018, output_price: 0.09}
-         - {name: qwen/qwen3.7-flash,             display_name: Qwen 3.7 Flash,    color: "#7c3aed", input_price: 0.03,  output_price: 0.13}
-         - {name: deepseek/deepseek-v4-flash-0731, display_name: DeepSeek V4 Flash, color: "#2563eb", input_price: 0.0444, output_price: 0.1333}
-   ```
-   (Prices are USD per 1M tokens; check openrouter.ai/models. Endpoints without a key are harmless — or delete them.)
+4. **Models**: nothing to do. With `OPENROUTER_API_KEY` set, the server always offers OpenRouter (even if your
+   `config.yaml` doesn't list it, e.g. one copied from an older example) and imports every OpenRouter chat model that
+   your key can use, with prices. To show only some, set `auto_models: ["openai/*", "qwen/*", "deepseek/*"]` on the
+   `openrouter` endpoint in `config.yaml`.
 5. **Start it**:
    ```bash
    make up                              # Docker

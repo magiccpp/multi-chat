@@ -53,6 +53,14 @@ def wanted(patterns: Any, model_id: str) -> bool:
     return False
 
 
+def import_patterns(ep: Endpoint, models: list[Model]) -> Any:
+    """Which vendor models to import: `auto_models` when set; an endpoint without any configured models imports all
+    of them, since there would otherwise be nothing to choose from."""
+    if ep.auto_models:
+        return ep.auto_models
+    return not any(m.source != "catalog" for m in models)
+
+
 def _set(models: list[Model], available: bool, detail: str) -> None:
     for m in models:
         m.available = available
@@ -69,11 +77,11 @@ async def online_clis(db: AsyncSession) -> set[str]:
     return drivers
 
 
-async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str, Any]], models: list[Model]) -> list[Model]:
+async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str, Any]], models: list[Model], patterns: Any) -> list[Model]:
     by_name = {m.model_name: m for m in models}
     taken = len((await db.execute(select(Model.id))).all())
     for item in catalog:
-        if not item.get("chat", True) or not wanted(ep.auto_models, item["id"]):
+        if not item.get("chat", True) or not wanted(patterns, item["id"]):
             continue
         m = by_name.get(item["id"])
         if m is None:
@@ -136,8 +144,9 @@ async def check_endpoint(db: AsyncSession, ep: Endpoint) -> None:
         ep.status, ep.status_detail = "error", detail[:500]
         _set(models, False, f"{ep.name}: {detail[:200]}")
         return
-    if ep.auto_models:
-        models = await import_catalog(db, ep, catalog, models)
+    patterns = import_patterns(ep, models)
+    if patterns:
+        models = await import_catalog(db, ep, catalog, models, patterns)
     offered = {item["id"] for item in catalog}
     for m in models:
         if offered and m.model_name not in offered:

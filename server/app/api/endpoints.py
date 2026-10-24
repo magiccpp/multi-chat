@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import availability, crypto
+from app.config_sync import is_openrouter
 from app.db import get_db
 from app.providers.base import ChatMessage, ProviderError, TextDelta
 from app.providers.registry import PRESETS, provider_for
@@ -56,7 +57,7 @@ async def create_endpoint(body: EndpointIn, db: AsyncSession = Depends(get_db)) 
         base_url=body.base_url,
         api_key_enc=crypto.encrypt(body.api_key),
         enabled=body.enabled,
-        auto_models=body.auto_models,
+        auto_models=body.auto_models if body.auto_models is not None else is_openrouter(body.base_url),
         source="api",
     )
     db.add(row)

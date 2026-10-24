@@ -9,7 +9,9 @@
 #     are shown greyed out in the apps and cannot be added to a session.
 #   - auto_models: true imports the vendor's chat models automatically (OpenRouter: hundreds, with prices);
 #     a list of glob patterns imports only matching ids, e.g. ["openai/*", "anthropic/claude-*"].
-#     Models listed under `models:` keep their own display name, color and prices.
+#     Models listed under `models:` keep their own display name, color and prices. OpenRouter endpoints, and endpoints
+#     with no `models:`, import automatically unless auto_models is false.
+#   - OPENROUTER_API_KEY in .env is enough: the server adds an `openrouter` endpoint if this file has none.
 
 endpoints:
   - name: anthropic

@@ -81,3 +81,37 @@ async def test_missing_key_and_check_all(client):
     assert results["mock"]["status"] == "ok"
     model = (await models_of(client, ep["id"]))["m1"]
     assert not model["available"] and "no API key" in model["availability_detail"]
+
+
+def test_builtin_openrouter_endpoint():
+    from app.config_sync import with_builtin_endpoints
+
+    mock = {"name": "mock", "kind": "mock", "base_url": "mock://local"}
+    # no key in the environment: nothing added
+    assert with_builtin_endpoints([mock], {}) == [mock]
+    # key set, config doesn't mention OpenRouter: it is added with the whole catalog
+    eps = with_builtin_endpoints([mock], {"OPENROUTER_API_KEY": "sk-or-test"})
+    assert eps[1] == {"name": "openrouter", "kind": "openai_compatible", "base_url": "https://openrouter.ai/api/v1",
+                      "api_key": "sk-or-test", "auto_models": True, "models": []}
+    # an OpenRouter entry without a key (old example config) gets the key; no duplicate
+    old = {"name": "openrouter", "kind": "openai_compatible", "base_url": "https://openrouter.ai/api/v1", "api_key": "", "models": []}
+    eps = with_builtin_endpoints([old], {"OPENROUTER_API_KEY": "sk-or-test"})
+    assert len(eps) == 1 and eps[0]["api_key"] == "sk-or-test"
+    # one added from a client already covers it
+    assert with_builtin_endpoints([mock], {"OPENROUTER_API_KEY": "k"}, skip_openrouter=True) == [mock]
+
+
+async def test_endpoint_without_models_imports_catalog(client, vendor_url):
+    ep = (await client.post("/api/endpoints", json={"name": "vendor-empty", "kind": "openai_compatible", "base_url": vendor_url,
+                                                    "api_key": "right-key"})).json()
+    assert ep["auto_models"] is False
+    assert (await client.post(f"/api/endpoints/{ep['id']}/check")).json()["status"] == "ok"
+    models = await models_of(client, ep["id"])
+    assert {"good-model", "vision-model"} <= set(models) and all(m["available"] for m in models.values())
+
+
+async def test_openrouter_endpoint_imports_by_default(client):
+    ep = (await client.post("/api/endpoints", json={"name": "or-from-app", "kind": "openai_compatible",
+                                                    "base_url": "https://openrouter.ai/api/v1"})).json()
+    assert ep["auto_models"] is True
+    await client.patch(f"/api/endpoints/{ep['id']}", json={"enabled": False})
