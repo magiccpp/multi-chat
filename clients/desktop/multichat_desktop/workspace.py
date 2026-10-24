@@ -185,7 +185,7 @@ class EditorTabs(QTabWidget):
         self.tabCloseRequested.connect(self.removeTab)
         welcome = QLabel(
             "<h2>MultiChat</h2><p>PLAN: ask several models and compare their answers on the right.<br>"
-            "Vote ▲/▼ on replies, then <b>★ Pick as builder</b> to switch to BUILD.</p>"
+            "Vote ▲/▼ on replies, then <b>★ Pick</b> to switch to BUILD.</p>"
             "<p>Files the builder changes show up here as diffs. Double-click a file on the left to view it.</p>"
         )
         welcome.setAlignment(Qt.AlignmentFlag.AlignCenter)

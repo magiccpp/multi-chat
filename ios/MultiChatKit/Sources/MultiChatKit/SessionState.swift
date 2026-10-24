@@ -166,7 +166,10 @@ public struct SessionState: Sendable {
             if let id = event["message_id"]?.int, let text = event["text"]?.string { messages[id]?.content += text }
             if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
         case "reasoning":
-            if let id = event["message_id"]?.int, let text = event["text"]?.string { messages[id]?.reasoning = (messages[id]?.reasoning ?? "") + text }
+            if let id = event["message_id"]?.int, let text = event["text"]?.string, var m = messages[id] {
+                m.reasoning = (m.reasoning ?? "") + text  // copy first: Swift forbids reading and writing messages at once
+                messages[id] = m
+            }
             if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
         case "tool_call":
             if let id = event["message_id"]?.int, let call = try? event["call"]?.decode(ToolCall.self) {

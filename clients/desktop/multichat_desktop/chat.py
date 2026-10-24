@@ -70,11 +70,12 @@ class MessageCard(QFrame):
         header = QHBoxLayout()
         self.title = QLabel()
         self.title.setTextFormat(Qt.TextFormat.RichText)
-        header.addWidget(self.title)
-        header.addStretch(1)
+        self.title.setWordWrap(True)  # wraps instead of pushing the vote / pick buttons out of sight
+        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        header.addWidget(self.title, 1)
         self.up = self._tool("▲", "Upvote", lambda: self._vote(1))
         self.down = self._tool("▼", "Downvote", lambda: self._vote(-1))
-        self.builder = self._tool("★ Pick as builder", "Use this model to build (switches to BUILD)", self._pick, checkable=False)
+        self.builder = self._tool("★ Pick", "Pick this model as the builder (switches to BUILD)", self._pick, checkable=False)
         self.copy = self._tool("Copy", "Copy this reply (Markdown) to the clipboard", self._copy, checkable=False)
         for w in (self.up, self.down, self.builder, self.copy):
             header.addWidget(w)
@@ -90,6 +91,7 @@ class MessageCard(QFrame):
         self.reasoning = QLabel()
         self.reasoning.setObjectName("muted")
         self.reasoning.setWordWrap(True)
+        self.reasoning.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         self.reasoning.setTextFormat(Qt.TextFormat.PlainText)
         self.reasoning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.reasoning.setStyleSheet("padding-left: 12px; font-style: italic;")
@@ -100,7 +102,9 @@ class MessageCard(QFrame):
         self.body.setTextFormat(Qt.TextFormat.MarkdownText)
         self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self.body.setOpenExternalLinks(True)
-        self.body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        # Ignored width: the card follows the chat's width; long lines wrap (code is clipped) instead of
+        # making the whole chat scroll sideways
+        self.body.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.body)
         self.attachments: AttachmentView | None = None
         if self.view.attachments:
@@ -110,6 +114,7 @@ class MessageCard(QFrame):
         self.tools = QLabel()
         self.tools.setTextFormat(Qt.TextFormat.RichText)
         self.tools.setWordWrap(True)
+        self.tools.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
         # links too: "show N more lines" / "show less" only work when the label lets the mouse activate them
         self.tools.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
                                            | Qt.TextInteractionFlag.LinksAccessibleByMouse)
@@ -226,7 +231,7 @@ class MessageCard(QFrame):
                 lines = body.rstrip().splitlines()
                 shown = lines if self.expanded else lines[:6]
                 pre = html.escape("\n".join(shown))
-                rows.append(f'<pre style="margin:2px 0 4px 16px;color:{c["muted"]}">{pre}</pre>')
+                rows.append(f'<pre style="margin:2px 0 4px 16px;color:{c["muted"]};white-space:pre-wrap">{pre}</pre>')
                 if len(lines) > len(shown):
                     rows.append(f'<a href="more" style="margin-left:16px">show {len(lines) - len(shown)} more lines</a>')
                 elif self.expanded and len(lines) > 6:
@@ -592,6 +597,7 @@ class ChatPanel(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # replies wrap to the width
         inner = QWidget()
         self.list = QVBoxLayout(inner)
         self.list.setContentsMargins(8, 8, 8, 8)

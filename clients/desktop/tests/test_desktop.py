@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import qasync  # noqa: E402
 from PySide6.QtCore import QEvent, QObject  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMainWindow, QMenu, QToolButton, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QDockWidget, QLabel, QMainWindow, QMenu, QToolButton, QWidget  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 TOKEN = "desktop-test-token"
@@ -199,8 +199,24 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
             assert "tok · $" in win.chat.cards[r.id].title.text()
         assert all("$" in win.chat.tabs.tabText(i) for i in range(win.chat.tabs.count()))
         win.grab().save(str(SHOTS / "desktop-plan.png"))
-        # the panels can be made narrow: no row of chips forces a minimum width (the divider would barely move)
-        assert win.right.minimumSizeHint().width() < 480, win.right.minimumSizeHint().width()
+        # the chat is the main window; Files and the editor are panels that can be closed or floated
+        assert win.centralWidget() is win.chat and win.editor_dock.isHidden()
+        assert win.left.features() & QDockWidget.DockWidgetFeature.DockWidgetClosable
+        assert win.chat.minimumSizeHint().width() < 480, win.chat.minimumSizeHint().width()
+        # a narrow chat: every reply's vote and pick buttons stay in view, no sideways scrolling
+        win.left.hide()
+        win.resize(560, 900)
+        await asyncio.sleep(0.3)
+        viewport = win.chat.scroll.viewport()
+        for r in replies:
+            card = win.chat.cards[r.id]
+            for button in (card.up, card.down, card.builder):
+                right = button.mapTo(viewport, button.rect().topRight()).x()
+                assert button.isVisible() and right <= viewport.width(), (button.text(), right, viewport.width())
+        win.grab().save(str(SHOTS / "desktop-narrow.png"))
+        win.left.show()
+        win.resize(1500, 920)
+        await asyncio.sleep(0.2)
         # Details…: per-model breakdown
         win.chat.show_cost_details()
         await until(lambda: getattr(win.chat, "cost_dialog", None) is not None)
@@ -243,6 +259,7 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         await until(lambda: any(isinstance(win.editor.widget(i), DiffView) and win.editor.widget(i).accept_btn.isVisible()
                                 for i in range(win.editor.count())))
         assert any(isinstance(w, ApprovalCard) for w in win.chat.approval_cards.values())
+        assert win.editor_dock.isVisible()  # the editor panel opened by itself for the diff
         # the approval is the last item in the chat list and scrolled into view
         approval = next(iter(win.chat.approval_cards.values()))
         assert win.chat.list.indexOf(approval) == win.chat.list.count() - 2  # just above the trailing stretch

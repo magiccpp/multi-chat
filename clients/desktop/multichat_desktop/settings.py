@@ -99,12 +99,12 @@ def save_layout(window) -> None:  # noqa: ANN001 - QMainWindow
     """Window size and panel widths, as the user left them."""
     q = qsettings()
     q.setValue("window/geometry", window.saveGeometry())
-    q.setValue("window/state", window.saveState())
+    q.setValue("window/state2", window.saveState())  # 2: chat in the middle, panels around it
 
 
 def restore_layout(window) -> None:  # noqa: ANN001 - QMainWindow
     q = qsettings()
-    geometry, state = q.value("window/geometry"), q.value("window/state")
+    geometry, state = q.value("window/geometry"), q.value("window/state2")
     if geometry is not None:
         window.restoreGeometry(geometry)
     if state is not None:

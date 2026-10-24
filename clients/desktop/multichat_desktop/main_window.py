@@ -59,9 +59,21 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon())
         self.resize(1500, 920)
 
-        # center: editor tabs
+        # center: the chat, the main interface (it can't be closed)
+        self.chat = ChatPanel(ctl)
+        self.setCentralWidget(self.chat)
+        panel = (QDockWidget.DockWidgetFeature.DockWidgetClosable | QDockWidget.DockWidgetFeature.DockWidgetMovable
+                 | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+
+        # right: editor / diffs, a panel that can be closed or floated; it opens by itself for a file or a diff
         self.editor = EditorTabs(ctl)
-        self.setCentralWidget(self.editor)
+        self.editor_dock = QDockWidget("Editor")
+        self.editor_dock.setObjectName("editor_dock")  # names let saveState()/restoreState() remember the layout
+        self.editor_dock.setWidget(self.editor)
+        self.editor_dock.setFeatures(panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.editor_dock)
+        self.editor_dock.hide()
+        self.editor.currentChanged.connect(lambda i: self.editor_dock.show() if i >= 0 else None)
 
         # left: files / sessions
         self.files = FileTree(ctl)
@@ -74,19 +86,11 @@ class MainWindow(QMainWindow):
         self.left_stack.addWidget(self.files)
         self.left_stack.addWidget(self.sessions)
         self.left = QDockWidget("Files")
-        self.left.setObjectName("files_dock")  # names let saveState()/restoreState() remember the layout
+        self.left.setObjectName("files_dock")
         self.left.setWidget(self.left_stack)
-        self.left.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.left.setFeatures(panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left)
-
-        # right: chat
-        self.chat = ChatPanel(ctl)
-        self.right = QDockWidget("Chat")
-        self.right.setObjectName("chat_dock")
-        self.right.setWidget(self.chat)
-        self.right.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.right)
-        self.resizeDocks([self.left, self.right], [260, 760], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.left, self.editor_dock], [260, 560], Qt.Orientation.Horizontal)
 
         self._build_activity_bar()
         self._build_toolbar()
@@ -129,6 +133,10 @@ class MainWindow(QMainWindow):
         self.act_files.triggered.connect(lambda: self._left_page(0))
         self.act_sessions.triggered.connect(lambda: self._left_page(1))
         bar.addSeparator()
+        editor = QAction("📝\nEditor", self)
+        editor.setToolTip("Show or hide the editor / diff panel")
+        editor.triggered.connect(lambda: self.editor_dock.setVisible(not self.editor_dock.isVisible()))
+        bar.addAction(editor)
         for text, slot in (("🔌\nEndpoints", self.open_endpoints), ("🧠\nMemory", self.open_memory), ("🖥\nRunner", self.open_runner),
                            ("📊\nStats", self.open_stats)):
             a = QAction(text, self)
@@ -204,6 +212,7 @@ class MainWindow(QMainWindow):
             self.tray.show()
 
     def _left_page(self, index: int) -> None:
+        self.left.show()  # reopens the panel if it was closed
         self.left_stack.setCurrentIndex(index)
         self.left.setWindowTitle(["Files", "Sessions"][index])
         if index == 1:
