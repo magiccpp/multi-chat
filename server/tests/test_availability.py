@@ -118,13 +118,11 @@ async def test_openrouter_endpoint_imports_by_default(client):
 
 
 async def test_config_without_models_fetches_vendor_list(client, vendor_url):
-    import yaml
-
     from app import db as dbmod
     from app.config import get_settings
-    from app.config_sync import sync_config
+    from app.config_sync import load_config, sync_config
 
-    base = yaml.safe_load(get_settings().config_file.read_text())
+    base = load_config(get_settings().config_file)  # with ${ENV} references expanded, like the server
 
     async def sync(models):
         ep = {"name": "dyn", "kind": "openai_compatible", "base_url": vendor_url, "api_key": "right-key"}
