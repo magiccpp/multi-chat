@@ -111,5 +111,5 @@ Logs: server `docker compose logs -f server`; the Windows app prints to the cons
 3. Target **MultiChat → Signing & Capabilities**: choose your Team (Apple ID) and a unique bundle id.
 4. iPhone: enable **Developer Mode** (Settings → Privacy & Security), connect it, select it in Xcode, press **Run**.
 5. In the app: server URL + token → Sessions → ✎ new session → pick the OpenRouter models → ask something; vote with
-   👍/👎; long-press-free "…" menu → **Pick as builder**; approvals from a desktop/TUI runner appear as cards
-   (edits open a diff). Stats tab shows cost and win rate per model.
+   👍/👎; a reply's "…" menu → **Pick as builder**; approvals for work done by a desktop/TUI runner appear as cards
+   (edits open a diff). The Stats tab shows cost and win rate per model.
