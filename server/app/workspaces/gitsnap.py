@@ -16,7 +16,7 @@ Exec = Callable[[str], Awaitable[tuple[int, str]]]
 MAX_FILE = 1_000_000
 
 _WRITE_TREE = (
-    'tmp=$(mktemp) && idx=$(git rev-parse --git-path index) && {{ cp "$idx" "$tmp" 2>/dev/null || true; }} '
+    'tmp=$(mktemp) && idx=$(git rev-parse --git-path index) && {{ cp "$idx" "$tmp" 2>/dev/null || rm -f "$tmp"; }} '
     '&& GIT_INDEX_FILE="$tmp" git add -A {path} >/dev/null 2>&1 && GIT_INDEX_FILE="$tmp" git write-tree; rc=$?; rm -f "$tmp"; exit $rc'
 )
 
