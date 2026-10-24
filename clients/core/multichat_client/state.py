@@ -23,6 +23,7 @@ class MessageView:
     vote: int = 0
     attachments: list[dict[str, Any]] = field(default_factory=list)  # {id, filename, mime, size, kind}
     usage: dict[str, Any] | None = None  # {input_tokens, output_tokens, cost, estimated} of this reply
+    reasoning: str = ""  # the model's thinking, shown when the user opens it
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> MessageView:
@@ -41,6 +42,7 @@ class MessageView:
             vote=d.get("vote", 0),
             attachments=d.get("attachments") or [],
             usage=d.get("usage"),
+            reasoning=d.get("reasoning") or "",
         )
 
 
@@ -172,6 +174,8 @@ class SessionState:
             view.vote = old.vote
         if old is not None and view.usage is None:
             view.usage = old.usage
+        if old is not None and not view.reasoning:
+            view.reasoning = old.reasoning  # streamed so far
         self.messages[view.id] = view
         if view.role == "tool" and view.tool_call_id:
             self.results[view.tool_call_id] = view
@@ -267,6 +271,12 @@ class SessionState:
             m = self.messages.get(event["message_id"])
             if m is not None:
                 m.content += event["text"]
+            if event.get("model_id") in self.status:
+                self.status[event["model_id"]]["last"] = time.monotonic()
+        elif etype == "reasoning":
+            m = self.messages.get(event["message_id"])
+            if m is not None:
+                m.reasoning += event["text"]
             if event.get("model_id") in self.status:
                 self.status[event["model_id"]]["last"] = time.monotonic()
         elif etype == "tool_call":

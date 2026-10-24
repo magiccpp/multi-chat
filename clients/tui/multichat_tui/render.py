@@ -108,9 +108,16 @@ def tool_lines(st: SessionState, m: MessageView, *, expanded: bool) -> list[Rend
 
 def message_body(st: SessionState, m: MessageView, *, expanded: bool = False) -> RenderableType:
     parts: list[RenderableType] = []
+    thinking_now = m.role == "assistant" and m.status == "streaming" and not m.content.strip() and not m.tool_calls
+    if m.reasoning:  # folded; enter on the focused reply opens it (with long tool output)
+        words = len(m.reasoning.split())
+        head = f"💭 {'thinking…' if thinking_now else 'thought'} ({words:,} words)"
+        parts.append(Text(head + ("" if expanded else " — enter to show"), style="dim"))
+        if expanded:
+            parts.append(Text(m.reasoning.strip(), style="dim italic"))
     if m.content.strip():
         parts.append(Markdown(BR.sub(" · ", m.content)) if m.role == "assistant" else Text(m.content))
-    elif m.role == "assistant" and m.status == "streaming" and not m.tool_calls:
+    elif thinking_now and not m.reasoning:
         parts.append(Text("thinking…", style="dim italic"))
     if m.attachments:
         parts.append(attachments_text(m.attachments))

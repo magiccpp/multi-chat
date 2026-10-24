@@ -80,6 +80,21 @@ class MessageCard(QFrame):
             header.addWidget(w)
         layout.addLayout(header)
 
+        # the model's reasoning, folded: click "Thinking" to open it (links need LinksAccessibleByMouse)
+        self.show_thinking = False
+        self.thinking = QLabel()
+        self.thinking.setTextFormat(Qt.TextFormat.RichText)
+        self.thinking.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.thinking.linkActivated.connect(self._toggle_thinking)
+        layout.addWidget(self.thinking)
+        self.reasoning = QLabel()
+        self.reasoning.setObjectName("muted")
+        self.reasoning.setWordWrap(True)
+        self.reasoning.setTextFormat(Qt.TextFormat.PlainText)
+        self.reasoning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.reasoning.setStyleSheet("padding-left: 12px; font-style: italic;")
+        layout.addWidget(self.reasoning)
+
         self.body = QLabel()
         self.body.setWordWrap(True)
         self.body.setTextFormat(Qt.TextFormat.MarkdownText)
@@ -144,6 +159,10 @@ class MessageCard(QFrame):
         self.expanded = not self.expanded
         self.refresh()
 
+    def _toggle_thinking(self, _: str) -> None:
+        self.show_thinking = not self.show_thinking
+        self.refresh()
+
     def refresh(self) -> None:
         st, m, c = self.ctl.st, self.view, colors()
         is_reply = m.role == "assistant"
@@ -175,7 +194,16 @@ class MessageCard(QFrame):
         self.down.setChecked(m.vote == -1)
         self.setStyleSheet(f"QFrame#card {{ border-left: 4px solid {color if is_reply else c['border']}; }}")
 
-        text = m.content or ("_thinking…_" if m.status == "streaming" and not m.tool_calls else "")
+        thinking_now = m.status == "streaming" and not m.content and not m.tool_calls
+        if m.reasoning:
+            words = len(m.reasoning.split())
+            label = ("Thinking…" if thinking_now else "Thought") + f" ({words:,} words)"
+            action = "hide" if self.show_thinking else "show"
+            self.thinking.setText(f'💭 <a href="think" style="color:{c["muted"]}">{label} · {action}</a>')
+            self.reasoning.setText(m.reasoning)
+        self.thinking.setVisible(bool(m.reasoning))
+        self.reasoning.setVisible(bool(m.reasoning) and self.show_thinking)
+        text = m.content or ("_thinking…_" if thinking_now and not m.reasoning else "")
         if is_reply:
             text = BR.sub(" · ", text)  # models put <br> in table cells; Qt's Markdown drops raw HTML
         # User prompts are shown verbatim; model replies are Markdown.
@@ -848,7 +876,7 @@ class ChatPanel(QWidget):
             if m["role"] != "tool":
                 self._add_card(m["id"])
                 self.dirty.add(m["id"])
-        elif etype in ("delta", "tool_call"):
+        elif etype in ("delta", "reasoning", "tool_call"):
             self.dirty.add(ev["message_id"])
         elif etype in ("tool_progress", "tool_result"):
             owner = self._owner(ev.get("call_id") or "")

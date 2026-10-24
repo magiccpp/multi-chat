@@ -192,3 +192,21 @@ def test_fit_to_window_keeps_newest_and_tool_pairs():
     # the newest exchange is kept even when it alone is too big
     kept, omitted = fit_to_window("system", [ChatMessage("user", big * 10)], 4096)
     assert omitted == 0 and len(kept) == 1
+
+
+async def test_openai_reasoning_streams_as_reasoning_deltas():
+    """OpenRouter sends `reasoning`, DeepSeek / vLLM `reasoning_content`: both become ReasoningDelta, never answer text."""
+    from app.providers.base import ReasoningDelta
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse([
+            openai_chunk({"role": "assistant", "reasoning": "First, "}),
+            openai_chunk({"reasoning_content": "check the logs."}),
+            openai_chunk({"content": "It's the cron job."}),
+            openai_chunk({}, finish="stop"), "data: [DONE]\n\n"]), headers={"content-type": "text/event-stream"})
+
+    p = OpenAICompatProvider(api_key="k", base_url="http://local/v1")
+    p.client = AsyncOpenAI(api_key="k", base_url="http://local/v1", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    events = await collect(p, [ChatMessage("user", "why?")], [])
+    assert "".join(e.text for e in events if isinstance(e, ReasoningDelta)) == "First, check the logs."
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "It's the cron job."

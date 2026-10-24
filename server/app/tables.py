@@ -177,6 +177,8 @@ class Message(Base):
     # [{id, filename, mime, size, kind}] for user messages with files
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JsonType)
     status: Mapped[str] = mapped_column(String(16), default="complete")  # streaming | complete | error | cancelled
+    # the model's reasoning before / while it answered (reasoning models); shown on demand, never sent back
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = _now()
 
 

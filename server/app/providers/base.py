@@ -63,6 +63,13 @@ class UsageEvent:
 
 
 @dataclass
+class ReasoningDelta:
+    """A piece of the model's reasoning ("thinking"), streamed before or alongside its answer."""
+
+    text: str
+
+
+@dataclass
 class Progress:
     """Output that isn't answer text: reasoning, or a tool call being written. Lets the apps say what a model is
     doing while no text arrives."""
@@ -77,7 +84,7 @@ class Done:
     stop_reason: str | None = None
 
 
-StreamEvent = TextDelta | ToolCallEvent | UsageEvent | Progress | Done
+StreamEvent = TextDelta | ReasoningDelta | ToolCallEvent | UsageEvent | Progress | Done
 
 
 class ProviderError(Exception):

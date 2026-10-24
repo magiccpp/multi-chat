@@ -152,6 +152,18 @@ final class MultiChatKitTests: XCTestCase {
         XCTAssertEqual(plain.efforts, Effort.levels)
     }
 
+    func testReasoningStreamsIntoTheReply() throws {
+        var st = SessionState(session: try decode(Session.self, sessionJSON), messages: [], usage: [],
+                              models: try decode([ModelInfo].self, modelsJSON))
+        st.apply(try event(#"{"type": "message_start", "message": {"id": 4, "seq": 1, "turn_id": "t", "role": "assistant", "model_id": 7, "content": "", "status": "streaming"}}"#))
+        st.apply(try event(#"{"type": "reasoning", "message_id": 4, "model_id": 7, "text": "Let me "}"#))
+        st.apply(try event(#"{"type": "reasoning", "message_id": 4, "model_id": 7, "text": "check."}"#))
+        XCTAssertEqual(st.messages[4]?.reasoning, "Let me check.")
+        st.apply(try event(#"{"type": "message_end", "message": {"id": 4, "seq": 1, "turn_id": "t", "role": "assistant", "model_id": 7, "content": "Done", "status": "complete", "reasoning": "Let me check."}}"#))
+        XCTAssertEqual(st.messages[4]?.reasoning, "Let me check.")
+        XCTAssertEqual(st.messages[4]?.content, "Done")
+    }
+
     func testWaitTips() throws {
         var st = SessionState(session: try decode(Session.self, sessionJSON), messages: [], usage: [],
                               models: try decode([ModelInfo].self, modelsJSON))

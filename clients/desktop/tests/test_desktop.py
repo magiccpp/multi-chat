@@ -492,3 +492,30 @@ def test_show_more_lines_link_works():
     assert "line 19" in card.tools.text() and "show less" in card.tools.text()
     card.tools.linkActivated.emit("less")
     assert "line 19" not in card.tools.text()
+
+
+def test_thinking_opens_the_reasoning():
+    from multichat_client.state import SessionState
+    from multichat_desktop.chat import MessageCard
+
+    QApplication.instance() or QApplication([])
+
+    class Ctl:
+        st = SessionState()
+
+    Ctl.st.load({"id": 1, "participants": [{"model_id": 2}]}, [
+        {"id": 5, "seq": 1, "role": "assistant", "model_id": 2, "content": "", "status": "streaming"},
+    ], [], [{"id": 2, "display_name": "A", "color": "#f00"}])
+    card = MessageCard(Ctl, 5)
+    assert card.thinking.isHidden()  # no reasoning yet: the body says "thinking…"
+    Ctl.st.apply({"type": "reasoning", "message_id": 5, "model_id": 2, "text": "Check the cron logs first."})
+    card.refresh()
+    assert not card.thinking.isHidden() and "Thinking…" in card.thinking.text() and card.reasoning.isHidden()
+    card.thinking.linkActivated.emit("think")  # click
+    assert not card.reasoning.isHidden() and card.reasoning.text() == "Check the cron logs first."
+    Ctl.st.apply({"type": "message_end", "message": {"id": 5, "seq": 1, "role": "assistant", "model_id": 2,
+                                                     "content": "It's cron.", "reasoning": "Check the cron logs first."}})
+    card.refresh()
+    assert "Thought (5 words)" in card.thinking.text()
+    card.thinking.linkActivated.emit("think")
+    assert card.reasoning.isHidden()

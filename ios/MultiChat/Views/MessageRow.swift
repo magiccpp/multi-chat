@@ -13,6 +13,7 @@ struct MessageRow: View {
     let model: SessionModel
     let message: Message
     @State private var expanded = false
+    @State private var showThinking = false
 
     init(model: SessionModel, message: Message) {
         self.model = model
@@ -25,11 +26,21 @@ struct MessageRow: View {
         let color = message.isReply ? Color(hex: state.color(message.modelId)) : Color.secondary
         VStack(alignment: .leading, spacing: 6) {
             header(color: color)
+            let thinkingNow = message.status == "streaming" && message.content.isEmpty && (message.toolCalls ?? []).isEmpty
+            if let reasoning = message.reasoning, !reasoning.isEmpty {
+                DisclosureGroup(isExpanded: $showThinking) {
+                    Text(reasoning).font(.caption).italic().foregroundStyle(.secondary).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } label: {
+                    Label("\(thinkingNow ? "Thinking…" : "Thought") (\(reasoning.split(separator: " ").count) words)",
+                          systemImage: "brain").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if !message.content.isEmpty {
                 Text(message.isReply ? markdown(message.content) : AttributedString(message.content))
                     .textSelection(.enabled)
                     .font(.callout)
-            } else if message.status == "streaming" && (message.toolCalls ?? []).isEmpty {
+            } else if thinkingNow && (message.reasoning ?? "").isEmpty {
                 Text("thinking…").italic().foregroundStyle(.secondary)
             }
             if !message.attachments.isEmpty {

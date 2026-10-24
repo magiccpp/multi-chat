@@ -209,9 +209,12 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var vote: Int
     public var attachments: [AttachmentInfo]
     public var usage: MessageUsage?
+    /// The model's reasoning ("thinking"), shown when the user opens it.
+    public var reasoning: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote, attachments, usage
+        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote, attachments, usage,
+             reasoning
     }
 
     public init(from decoder: Decoder) throws {
@@ -230,6 +233,7 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
         vote = try c.decodeIfPresent(Int.self, forKey: .vote) ?? 0
         attachments = try c.decodeIfPresent([AttachmentInfo].self, forKey: .attachments) ?? []
         usage = try c.decodeIfPresent(MessageUsage.self, forKey: .usage)
+        reasoning = try c.decodeIfPresent(String.self, forKey: .reasoning)
     }
 
     public var isReply: Bool { role == "assistant" }

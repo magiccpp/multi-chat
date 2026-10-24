@@ -57,3 +57,14 @@ def test_cleared_by_status_none_and_turn_end():
 def test_elapsed():
     assert elapsed(5.9) == "5 s"
     assert elapsed(125) == "2 min 05 s"
+
+
+def test_reasoning_streams_into_the_reply():
+    st = state()
+    st.apply({"type": "message_start", "message": {"id": 3, "seq": 2, "role": "assistant", "model_id": 7, "status": "streaming"}})
+    st.apply({"type": "reasoning", "message_id": 3, "model_id": 7, "text": "Let me "})
+    st.apply({"type": "reasoning", "message_id": 3, "model_id": 7, "text": "check."})
+    assert st.messages[3].reasoning == "Let me check." and st.messages[3].content == ""
+    st.apply({"type": "message_end", "message": {"id": 3, "seq": 2, "role": "assistant", "model_id": 7, "content": "Done",
+                                                 "reasoning": "Let me check."}})
+    assert st.messages[3].reasoning == "Let me check." and st.messages[3].content == "Done"

@@ -134,6 +134,7 @@ public struct SessionState: Sendable {
         var m = m
         if let old = messages[m.id], m.vote == 0 { m.vote = old.vote }
         if let old = messages[m.id], m.usage == nil { m.usage = old.usage }
+        if let old = messages[m.id], (m.reasoning ?? "").isEmpty { m.reasoning = old.reasoning }  // streamed so far
         messages[m.id] = m
         if m.role == "tool", let callId = m.toolCallId { results[callId] = m }
     }
@@ -163,6 +164,9 @@ public struct SessionState: Sendable {
             if let m = try? event["message"]?.decode(Message.self) { add(m) }
         case "delta":
             if let id = event["message_id"]?.int, let text = event["text"]?.string { messages[id]?.content += text }
+            if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
+        case "reasoning":
+            if let id = event["message_id"]?.int, let text = event["text"]?.string { messages[id]?.reasoning = (messages[id]?.reasoning ?? "") + text }
             if let mid = event["model_id"]?.int { status[mid]?.last = Date() }
         case "tool_call":
             if let id = event["message_id"]?.int, let call = try? event["call"]?.decode(ToolCall.self) {

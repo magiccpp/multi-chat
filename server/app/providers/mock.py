@@ -16,8 +16,8 @@ from urllib.parse import parse_qs, urlparse
 from app.providers.base import (
     ChatMessage,
     Done,
-    Progress,
     Provider,
+    ReasoningDelta,
     StreamEvent,
     TextDelta,
     ToolCall,
@@ -84,7 +84,8 @@ class MockProvider(Provider):
                 text += f" Calling {', '.join(c.name for c in calls)}."
 
         if self.think:
-            yield Progress("thinking", chars=1)
+            for word in ["Let ", "me ", "think ", "about ", "this."]:
+                yield ReasoningDelta(word)
             await asyncio.sleep(self.think)
         for word in re.findall(r"\S+\s*", text):
             if self.delay:

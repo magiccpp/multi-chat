@@ -37,7 +37,16 @@ from app.agent.tools import ToolContext, execute, tools_for
 from app.config import get_settings
 from app.config_sync import get_setting
 from app.pricing import cost_for
-from app.providers.base import ChatMessage, Progress, ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
+from app.providers.base import (
+    ChatMessage,
+    Progress,
+    ProviderError,
+    ReasoningDelta,
+    TextDelta,
+    ToolCall,
+    ToolCallEvent,
+    UsageEvent,
+)
 from app.providers.registry import provider_for
 from app.tables import Attachment, Compaction, Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
 from app.workspaces.base import NoWorkspace, Workspace, WorkspaceError
@@ -115,6 +124,7 @@ def message_event(m: Message, **extra: Any) -> dict[str, Any]:
         "recipients": m.recipients,
         "attachments": m.attachments,
         "status": m.status,
+        "reasoning": m.reasoning,
         **extra,
     }
 
@@ -454,6 +464,8 @@ class TurnManager:
                  waits.waiting_hint(endpoint.name, ctx.used, ctx.window, effort))
 
             text: list[str] = []
+            thought: list[str] = []
+            thought_len = 0
             calls: list[ToolCall] = []
             usage: UsageEvent | None = None
             started = time.monotonic()
@@ -467,6 +479,11 @@ class TurnManager:
                         text.append(ev.text)
                         bus.publish(session_id, {"type": "delta", "message_id": msg.id, "model_id": model.id, "text": ev.text})
                         note(waits.WRITING, "writing its answer")
+                    elif isinstance(ev, ReasoningDelta):
+                        thought.append(ev.text)
+                        thought_len += len(ev.text)
+                        bus.publish(session_id, {"type": "reasoning", "message_id": msg.id, "model_id": model.id, "text": ev.text})
+                        note.progress(Progress("thinking", chars=thought_len))
                     elif isinstance(ev, Progress):
                         note.progress(ev)
                     elif isinstance(ev, ToolCallEvent):
@@ -479,9 +496,11 @@ class TurnManager:
                 bus.publish(session_id, {"type": "error", "model_id": model.id, "message_id": msg.id, "message": str(exc)})
             except asyncio.CancelledError:
                 status = "cancelled"
-                await asyncio.shield(self._finish(session_id, msg, "".join(text), [], status, None, model, started, ttft))
+                await asyncio.shield(self._finish(session_id, msg, "".join(text), [], status, None, model, started, ttft,
+                                                  reasoning="".join(thought)))
                 raise
-            await self._finish(session_id, msg, "".join(text), calls, status, usage, model, started, ttft)
+            await self._finish(session_id, msg, "".join(text), calls, status, usage, model, started, ttft,
+                               reasoning="".join(thought))
             if status != "complete" or not calls:
                 return
 
@@ -553,10 +572,12 @@ class TurnManager:
         started: float,
         ttft: int | None,
         external: bool = False,
+        reasoning: str = "",
     ) -> None:
         async with dbmod.sessionmaker()() as db:
             row = await db.get(Message, msg.id)
             row.content = text
+            row.reasoning = reasoning or None
             # External calls were run by an agent CLI itself; they are shown but never replayed to API models.
             row.tool_calls = [{**c.to_json(), **({"external": True} if external else {})} for c in calls] or None
             row.status = status

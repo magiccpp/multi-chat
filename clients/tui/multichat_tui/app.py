@@ -306,7 +306,7 @@ class MultiChatApp(App):
             if m["role"] != "tool":
                 await self._mount_message(m["id"])
                 self.dirty.add(m["id"])
-        elif etype == "delta":
+        elif etype in ("delta", "reasoning"):
             self.dirty.add(ev["message_id"])
         elif etype in ("tool_call",):
             self.dirty.add(ev["message_id"])

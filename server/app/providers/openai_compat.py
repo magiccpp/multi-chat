@@ -16,6 +16,7 @@ from app.providers.base import (
     Done,
     Progress,
     Provider,
+    ReasoningDelta,
     ProviderError,
     StreamEvent,
     TextDelta,
@@ -121,7 +122,7 @@ class OpenAICompatProvider(Provider):
             raise ProviderError(str(exc)) from exc
 
         calls: dict[int, dict[str, str]] = {}
-        text_len = reasoning_len = 0
+        text_len = 0
         usage: UsageEvent | None = None
         finish: str | None = None
         try:
@@ -140,8 +141,7 @@ class OpenAICompatProvider(Provider):
                     extra = delta.model_extra or {}
                     thought = extra.get("reasoning") or extra.get("reasoning_content")
                     if isinstance(thought, str) and thought:
-                        reasoning_len += len(thought)
-                        yield Progress("thinking", chars=reasoning_len)
+                        yield ReasoningDelta(thought)
                     if delta.content:
                         text_len += len(delta.content)
                         yield TextDelta(delta.content)

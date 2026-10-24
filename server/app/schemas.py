@@ -250,6 +250,7 @@ class MessageOut(ORM):
     created_at: datetime
     vote: int = 0
     usage: dict[str, Any] | None = None  # {input_tokens, output_tokens, cost, estimated} for this reply
+    reasoning: str | None = None  # the model's thinking, if it shared it
 
 
 class ChatIn(BaseModel):

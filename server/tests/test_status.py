@@ -40,6 +40,12 @@ async def test_thinking_models_say_so(client):
     assert seq[:3] == [("waiting_model", "waiting for the reply to start (thinking-mock)"),
                        ("thinking", "thinking before it answers"), ("writing", "writing its answer")]
     assert seq[-1] == (None, None)
+    # the reasoning itself streams to the apps and is kept with the reply (shown when "Thinking" is clicked)
+    assert "".join(e["text"] for e in events if e["type"] == "reasoning") == "Let me think about this."
+    reply = [e["message"] for e in events if e["type"] == "message_end"][-1]
+    assert reply["reasoning"] == "Let me think about this." and "Let me think" not in reply["content"]
+    stored = [m for m in (await client.get(f"/api/sessions/{s['id']}/messages")).json() if m["role"] == "assistant"]
+    assert stored[-1]["reasoning"] == "Let me think about this."
 
 
 async def test_tools_and_approval_are_described(client, runner):  # noqa: F811

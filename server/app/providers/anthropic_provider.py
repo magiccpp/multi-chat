@@ -14,6 +14,7 @@ from app.providers.base import (
     Done,
     Progress,
     Provider,
+    ReasoningDelta,
     ProviderError,
     StreamEvent,
     TextDelta,
@@ -86,7 +87,6 @@ class AnthropicProvider(Provider):
         input_tokens = output_tokens = 0
         stop_reason: str | None = None
         blocks: dict[int, dict[str, Any]] = {}
-        thinking = 0
         try:
             stream = await self.client.messages.create(**kwargs)
             async for event in stream:
@@ -111,9 +111,8 @@ class AnthropicProvider(Provider):
                         slot = blocks[event.index]
                         slot["json"] += delta.partial_json
                         yield Progress("tool_args", slot["name"], len(slot["json"]))
-                    elif delta.type == "thinking_delta":
-                        thinking += len(getattr(delta, "thinking", "") or "")
-                        yield Progress("thinking", chars=thinking)
+                    elif delta.type == "thinking_delta" and getattr(delta, "thinking", ""):
+                        yield ReasoningDelta(delta.thinking)
                 elif etype == "content_block_stop":
                     slot = blocks.pop(event.index, None)
                     if slot is not None:
