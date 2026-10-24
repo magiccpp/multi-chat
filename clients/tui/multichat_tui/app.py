@@ -118,6 +118,7 @@ class MultiChatApp(App):
         self.dirty: set[int] = set()
         self.tab_model: int | None = None
         self.recipients: list[int] | None = None
+        self.pending_files: list[Path] = []  # /attach — sent with the next message
         self.quickvote_enabled = True
         self.quickvote_ids: list[int] = []
         self.runner: Runner | None = None
@@ -342,6 +343,8 @@ class MultiChatApp(App):
 
     def update_status(self) -> None:
         t = usage_text(self.st)
+        if self.pending_files:
+            t.append("   📎 " + ", ".join(p.name for p in self.pending_files) + " (/attach clear)", style="bold cyan")
         if self.st.approvals:
             t.append(f"   {len(self.st.approvals)} approval pending (ctrl+a)", style="bold red")
         t.append("   tab models · alt+↑ replies · ctrl+p commands", style="dim")
@@ -573,11 +576,34 @@ class MultiChatApp(App):
 
     @work(group="chat")
     async def send(self, text: str) -> None:
+        files, self.pending_files = self.pending_files, []
+        self.update_status()
+        sid = self.st.session_id
         try:
-            async for _ in self.client.chat(self.st.session_id, text, self.recipients):
+            ids = []
+            for path in files:
+                ids.append((await self.client.upload_attachment(sid, path.name, path.read_bytes()))["id"])
+            async for _ in self.client.chat(sid, text, self.recipients, ids):
                 pass  # events arrive through the session subscription
         except ApiError as exc:
             self.notify(exc.detail, severity="error", timeout=8)
+        except OSError as exc:
+            self.notify(f"cannot read attachment: {exc}", severity="error", timeout=8)
+
+    def attach(self, args: list[str]) -> None:
+        if args == ["clear"]:
+            self.pending_files = []
+        elif not args:
+            self.notify("usage: /attach <file> [file…]   (documents: PDF, Word, text, code; images: PNG, JPEG, …)")
+        for arg in args if args != ["clear"] else []:
+            path = Path(arg).expanduser()
+            if not path.is_file():
+                self.notify(f"no such file: {arg}", severity="error")
+            elif path.stat().st_size > 20 * 1024 * 1024:
+                self.notify(f"{path.name} is larger than 20 MB", severity="error")
+            else:
+                self.pending_files.append(path)
+        self.update_status()
 
     # ------------------------------------------------------------------ commands
 
@@ -600,9 +626,19 @@ class MultiChatApp(App):
             elif name == "help":
                 self.push_screen(TextScreen("MultiChat — keys and commands", help_body()))
             elif name == "new":
-                ids = [p["model_id"] for p in self.st.participants]
-                s = await c.create_session(" ".join(args) or "New session", ids, self.st.session.get("context_mode", "isolated"))
+                if self.st.is_empty:
+                    self.notify("This session is still empty — type a message to start it.")
+                    return
+                self.models = await c.models()
+                available = {m["id"] for m in self.models if m["available"] and m["enabled"]}
+                ids = [p["model_id"] for p in self.st.participants if p["model_id"] in available]
+                s = await c.create_session(" ".join(args) or "New session", ids, self.st.session.get("context_mode", "isolated"),
+                                           reuse_empty=True)
                 await self.open_session(s["id"])
+                if not ids:
+                    await self.run_command("models", [])
+            elif name == "attach":
+                self.attach(args)
             elif name == "sessions":
                 sessions = await c.sessions()
 
@@ -676,6 +712,10 @@ class MultiChatApp(App):
             elif name == "stats":
                 self.push_screen(TextScreen("Statistics — price and performance per model", stats_body(await c.stats(), compact=self.size.width < 150)))
             elif name == "endpoints":
+                if args[:1] == ["check"]:
+                    self.notify("checking keys and model lists…")
+                    await c.check_endpoints()
+                    self.models = await c.models()
                 eps, models, settings = await asyncio.gather(c.endpoints(), c.models(), c.settings())
                 self.push_screen(TextScreen("Server configuration", endpoints_body(eps, models, settings)))
             elif name == "rename":

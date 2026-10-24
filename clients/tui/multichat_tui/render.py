@@ -104,8 +104,23 @@ def message_body(st: SessionState, m: MessageView, *, expanded: bool = False) ->
         parts.append(Markdown(BR.sub(" · ", m.content)) if m.role == "assistant" else Text(m.content))
     elif m.role == "assistant" and m.status == "streaming" and not m.tool_calls:
         parts.append(Text("thinking…", style="dim italic"))
+    if m.attachments:
+        parts.append(attachments_text(m.attachments))
     parts.extend(tool_lines(st, m, expanded=expanded))
     return Group(*parts)
+
+
+def human_size(n: int) -> str:
+    return f"{n} B" if n < 1024 else f"{n / 1024:.1f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
+
+
+def attachments_text(attachments: list[dict]) -> Text:
+    t = Text()
+    for a in attachments:
+        icon = {"image": "🖼", "document": "📄"}.get(a.get("kind", ""), "📦")
+        t.append(f"{icon} {a['filename']}", style="cyan")
+        t.append(f" ({human_size(a.get('size', 0))})  ", style="dim")
+    return t
 
 
 def diff_renderable(diff: str) -> RenderableType:

@@ -20,6 +20,7 @@ class MessageView:
     tool_call_id: str | None = None
     recipients: list[int] | None = None
     vote: int = 0
+    attachments: list[dict[str, Any]] = field(default_factory=list)  # {id, filename, mime, size, kind}
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> MessageView:
@@ -36,6 +37,7 @@ class MessageView:
             tool_call_id=d.get("tool_call_id"),
             recipients=d.get("recipients"),
             vote=d.get("vote", 0),
+            attachments=d.get("attachments") or [],
         )
 
 
@@ -119,6 +121,11 @@ class SessionState:
     def latest_reply(self, model_id: int | None = None) -> MessageView | None:
         replies = [m for m in self.ordered(model_id) if m.role == "assistant"]
         return replies[-1] if replies else None
+
+    @property
+    def is_empty(self) -> bool:
+        """No messages yet: a fresh session that "New session" can reuse."""
+        return bool(self.session) and not self.messages and not self.busy
 
     def total_cost(self) -> float:
         return sum(u.cost for u in self.usage.values())

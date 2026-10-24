@@ -45,6 +45,30 @@ final class MultiChatKitTests: XCTestCase {
         XCTAssertEqual(msg.vote, 1)
     }
 
+    func testDecodesAvailabilityAndAttachments() throws {
+        let models = try decode([ModelInfo].self, """
+        [{"id": 9, "endpoint_id": 2, "endpoint_name": "openrouter", "endpoint_kind": "openai_compatible", "model_name": "x/y",
+          "display_name": "Y", "color": "#000000", "input_price": 0, "output_price": 0, "enabled": true, "supports_tools": true,
+          "source": "catalog", "available": false, "availability_detail": "openrouter: OpenRouter rejected the API key",
+          "supports_images": false}]
+        """)
+        XCTAssertFalse(models[0].available)
+        XCTAssertEqual(models[0].availabilityDetail, "openrouter: OpenRouter rejected the API key")
+        XCTAssertTrue(try decode([ModelInfo].self, modelsJSON)[0].available, "older servers: available by default")
+        let msg = try decode(Message.self, """
+        {"id": 1, "seq": 1, "turn_id": "t", "role": "user", "content": "look",
+         "attachments": [{"id": 4, "filename": "shot.png", "mime": "image/png", "size": 1200, "kind": "image"},
+                         {"id": 5, "filename": "spec.pdf", "mime": "application/pdf", "size": 9000, "kind": "document"}]}
+        """)
+        XCTAssertEqual(msg.attachments.map(\.isImage), [true, false])
+        let ep = try decode(Endpoint.self, """
+        {"id": 2, "name": "openrouter", "kind": "openai_compatible", "base_url": "https://openrouter.ai/api/v1",
+         "api_key_masked": "sk-…f3", "source": "config", "enabled": true, "status": "ok", "status_detail": "312 models",
+         "checked_at": "2026-10-24T10:00:00Z", "auto_models": true}
+        """)
+        XCTAssertEqual(ep.status, "ok")
+    }
+
     func testSSEParser() {
         let body = ": connected\n\ndata: {\"type\": \"turn_start\", \"seq\": 1}\n\ndata: {\"type\": \"delta\", \"text\": \"a b\"}\n\n"
         let events = SSEParser().events(in: body)
@@ -115,6 +139,22 @@ final class MultiChatKitTests: XCTestCase {
         let state = SessionState(session: built, messages: after, usage: usage, models: models)
         XCTAssertEqual(state.visible().count, replies.count + 1)
         print("live replies:", replies.map { "\(state.name($0.modelId)): \($0.content.prefix(80))" })
+
+        // attachments: upload a text document and send it with a message
+        let doc = try await api.uploadAttachment(s.id, filename: "notes.md", data: Data("# Notes\nSwift 6\n".utf8), mime: "text/markdown")
+        XCTAssertEqual(doc.kind, "document")
+        try await api.chat(s.id, content: "Summarise the notes", attachmentIds: [doc.id])
+        let withAttachment = try await api.messages(s.id)
+        XCTAssertEqual(withAttachment.last { $0.role == "user" }?.attachments.map(\.filename), ["notes.md"])
+        let downloaded = try await api.attachmentData(doc.id)
+        XCTAssertEqual(downloaded, Data("# Notes\nSwift 6\n".utf8))
+
+        // reuse_empty: a fresh session is reused instead of piling up blank ones
+        let blank = try await api.createSession(title: "blank", modelIds: Array(ids), reuseEmpty: true)
+        let again = try await api.createSession(title: "blank again", modelIds: Array(ids), reuseEmpty: true)
+        XCTAssertEqual(blank.id, again.id)
+        XCTAssertEqual(again.title, "blank again")
+        try await api.deleteSession(blank.id)
         try await api.deleteSession(s.id)
     }
 }

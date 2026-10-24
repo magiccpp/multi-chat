@@ -1,5 +1,8 @@
 import MultiChatKit
+import PhotosUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// Creates the session model and shows the chat once loaded.
 struct SessionScreen: View {
@@ -191,9 +194,19 @@ struct TokenBar: View {
 struct Composer: View {
     @Bindable var model: SessionModel
     @FocusState private var focused: Bool
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showFiles = false
 
     var body: some View {
         VStack(spacing: 6) {
+            if !model.pending.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.pending) { file in PendingChip(file: file) { model.pending.removeAll { $0.id == file.id } } }
+                    }
+                }
+            }
             if !model.isBuild && model.state.participants.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -216,6 +229,14 @@ struct Composer: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button { showPhotos = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
+                    Button { showFiles = true } label: { Label("Files", systemImage: "doc") }
+                    Button { pasteImage() } label: { Label("Paste image", systemImage: "doc.on.clipboard") }
+                        .disabled(!UIPasteboard.general.hasImages)
+                } label: {
+                    Image(systemName: "paperclip").font(.title3).padding(.bottom, 6)
+                }
                 TextField(model.isBuild ? "Tell the builder what to do…" : "Message the models…", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
@@ -225,12 +246,85 @@ struct Composer: View {
                     Button { model.stop() } label: { Image(systemName: "stop.circle.fill").font(.title2) }
                         .tint(.red)
                 } else {
-                    Button { model.send() } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                        .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if model.sending {
+                        ProgressView()
+                    } else {
+                        Button { model.send() } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+                            .disabled(!model.canSend)
+                    }
                 }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 8, matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { await loadPhotos(items) }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): urls.forEach(loadFile)
+            case .failure(let error): model.error = error.localizedDescription
+            }
+        }
+    }
+
+    private func loadPhotos(_ items: [PhotosPickerItem]) async {
+        for (i, item) in items.enumerated() {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            let type = item.supportedContentTypes.first { $0.conforms(to: .image) } ?? .jpeg
+            let ext = type.preferredFilenameExtension ?? "jpg"
+            model.attach(PendingAttachment(filename: "photo-\(timestamp())-\(i + 1).\(ext)", mime: type.preferredMIMEType ?? "image/jpeg", data: data))
+        }
+    }
+
+    private func loadFile(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            model.attach(PendingAttachment(filename: url.lastPathComponent, mime: mime, data: data))
+        } catch {
+            model.error = "Cannot read \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    private func pasteImage() {
+        guard let image = UIPasteboard.general.image, let data = image.pngData() else { return }
+        model.attach(PendingAttachment(filename: "pasted-\(timestamp()).png", mime: "image/png", data: data))
+    }
+}
+
+private func timestamp() -> String {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "HHmmss"
+    return f.string(from: Date())
+}
+
+/// An attachment waiting in the composer.
+struct PendingChip: View {
+    let file: PendingAttachment
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if file.isImage, let image = UIImage(data: file.data) {
+                Image(uiImage: image).resizable().scaledToFill().frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc.text").frame(width: 36, height: 36)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                Text(file.filename).font(.caption).lineLimit(1)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(file.data.count), countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 140, alignment: .leading)
+            Button(action: remove) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+        }
+        .padding(4)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 }

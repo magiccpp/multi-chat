@@ -60,6 +60,8 @@ def apply(app: QApplication) -> None:
         QFrame#card[focused="true"] {{ border: 1px solid {c['accent']}; }}
         QFrame#approval {{ background: {c['panel']}; border: 2px solid {c['accent']}; border-radius: 8px; }}
         QLabel#muted {{ color: {c['muted']}; }}
+        QFrame#attachment {{ background: {c['panel']}; border: 1px solid {c['border']}; border-radius: 6px; }}
+        QToolButton#chip {{ border: 1px solid {c['border']}; border-radius: 10px; padding: 2px 8px; }}
         QPushButton#chip {{ border: 1px solid {c['border']}; border-radius: 10px; padding: 2px 10px; }}
         QPushButton#chip:checked {{ background: {c['accent']}; color: black; border-color: {c['accent']}; }}
         QPushButton#primary {{ background: {c['accent']}; color: black; border-radius: 6px; padding: 6px 14px; font-weight: bold; }}

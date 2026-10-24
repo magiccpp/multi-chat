@@ -108,12 +108,32 @@ public final class APIClient: Sendable {
     public func usage(_ id: Int) async throws -> [UsageRow] { try await get("api/sessions/\(id)/usage") }
     public func changes(_ id: Int) async throws -> [FileChange] { try await get("api/sessions/\(id)/changes") }
 
-    public func createSession(title: String, modelIds: [Int], contextMode: String = "isolated") async throws -> Session {
+    /// `reuseEmpty`: if the latest session has no messages yet, the server updates and returns it instead.
+    public func createSession(title: String, modelIds: [Int], contextMode: String = "isolated", reuseEmpty: Bool = false) async throws -> Session {
         try await call("POST", "api/sessions", json: [
             "title": .string(title),
             "model_ids": .array(modelIds.map { .number(Double($0)) }),
             "context_mode": .string(contextMode),
+            "reuse_empty": .bool(reuseEmpty),
         ])
+    }
+
+    /// Re-check every endpoint's key and model list now.
+    public func checkEndpoints() async throws -> [EndpointStatus] {
+        try await call("POST", "api/endpoints/check", json: [:])
+    }
+
+    // MARK: attachments
+
+    /// Upload a document or image; send the returned id with `chat(attachmentIds:)`.
+    public func uploadAttachment(_ sessionId: Int, filename: String, data: Data, mime: String?) async throws -> AttachmentInfo {
+        var json: [String: JSONValue] = ["filename": .string(filename), "data_base64": .string(data.base64EncodedString())]
+        if let mime { json["mime"] = .string(mime) }
+        return try await call("POST", "api/sessions/\(sessionId)/attachments", json: json)
+    }
+
+    public func attachmentData(_ id: Int) async throws -> Data {
+        try await send(request("GET", "api/attachments/\(id)"))
     }
 
     public func deleteSession(_ id: Int) async throws {
@@ -161,9 +181,10 @@ public final class APIClient: Sendable {
     // MARK: streaming
 
     /// Start a turn. Events also arrive through `events(sessionID:)`; this returns once the turn has ended.
-    public func chat(_ id: Int, content: String, recipients: [Int]? = nil) async throws {
+    public func chat(_ id: Int, content: String, recipients: [Int]? = nil, attachmentIds: [Int] = []) async throws {
         var json: [String: JSONValue] = ["content": .string(content)]
         json["recipients"] = recipients.map { .array($0.map { .number(Double($0)) }) } ?? .null
+        json["attachment_ids"] = .array(attachmentIds.map { .number(Double($0)) })
         let req = request("POST", "api/sessions/\(id)/chat", body: try JSONEncoder().encode(json))
         #if canImport(FoundationNetworking)
         _ = try await send(req)  // Linux: no byte streaming; the response ends with the turn

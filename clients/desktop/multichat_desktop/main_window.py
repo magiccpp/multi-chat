@@ -181,9 +181,9 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
-        new_btn = QPushButton("＋ New session")
-        new_btn.clicked.connect(lambda: self.ctl.call(self.ctl.new_session()))
-        tb.addWidget(new_btn)
+        self.new_btn = QPushButton("＋ New session")
+        self.new_btn.clicked.connect(self.new_session)
+        tb.addWidget(self.new_btn)
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(app_icon(), self)
@@ -217,6 +217,18 @@ class MainWindow(QMainWindow):
 
     def open_folder(self) -> None:
         OpenFolderDialog(self.ctl, self).open()
+
+    def new_session(self) -> None:
+        if self.ctl.st.is_empty:
+            self.statusBar().showMessage("This session is still empty — type a message to start it.", 4000)
+            self.chat.composer.setFocus()
+            return
+
+        def done(created: bool) -> None:
+            if created:
+                ModelsDialog(self.ctl, self, title="Models for the new session").open()
+
+        self.ctl.call(self.ctl.new_session(), done)
 
     def open_models(self) -> None:
         async def go() -> None:

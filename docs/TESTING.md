@@ -21,7 +21,9 @@ million tokens).
    ```
    OPENROUTER_API_KEY=sk-or-v1-…
    ```
-4. **Pick the models** in `config.yaml`: replace the `openrouter` endpoint's `models: []` with
+4. **Models**: the example `config.yaml` has `auto_models: true` for OpenRouter, so the server imports every
+   OpenRouter chat model (with prices) once it has checked the key — nothing else to do. To show only a few, either
+   use patterns (`auto_models: ["openai/*", "qwen/*", "deepseek/*"]`) or set `auto_models: false` and list them:
    ```yaml
        models:
          - {name: openai/gpt-oss-20b,             display_name: GPT-OSS 20B,       color: "#10a37f", input_price: 0.018, output_price: 0.09}
@@ -38,7 +40,8 @@ million tokens).
 6. **Check it**:
    ```bash
    curl http://localhost:8000/api/health                 # {"ok":true,...}
-   docker compose logs server | tail                     # "config synced ... 'models': N"
+   docker compose logs server | tail                     # "config synced ... 'models': N", "endpoint openrouter: ok"
+   curl -s -X POST -H "Authorization: Bearer <token>" http://localhost:8000/api/endpoints/check   # key status per endpoint
    grep MULTICHAT_API_TOKEN .env                         # the token the apps need
    ```
 7. **Optional: try it from the server's terminal** (Python 3.11+):
@@ -73,7 +76,9 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
    Windows SmartScreen may warn about an unsigned app: *More info → Run anyway*.
 4. **Connect**: server URL `http://<server-ip>:8000`, token = `MULTICHAT_API_TOKEN` from the server's `.env`
    (stored in Windows Credential Manager).
-5. **Plan with several models**: click **Models (0)** → tick the three OpenRouter models → Save. Type a question,
+5. **Plan with several models**: click **Models (0)** → type e.g. `flash` in the search box → tick a few OpenRouter
+   models → Save. Models whose endpoint has no key (or a wrong one) are grey and can't be ticked; hover for the reason.
+   **Endpoints** in the left bar shows each endpoint's status and has **Check all keys now**. Type a question,
    press Enter. Switch **Isolated / Shared** in the toolbar and ask again — in Shared mode later models comment on
    earlier answers. Use the tabs to see one model's thread; ▲/▼ to vote. The status bar shows tokens and $ per model.
 6. **Let it work on this PC**: left bar **Runner** → tick *Let MultiChat run tasks on this PC* → *Add folder…* (e.g.
@@ -85,8 +90,13 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
    then ask e.g. *"Add a function `greet(name)` to hello.py with a test, then run `python hello.py`"*. Edits open as
    diffs with **Accept / Reject**; commands show an **Approve / Reject** card in the chat. Afterwards the change opens
    as a diff with **Revert this turn**.
-9. **Statistics**: left bar **Stats** — cost, tokens, votes, win rate, latency per model.
-10. Closing the window keeps MultiChat in the tray (so the runner stays available); right-click the tray icon → Quit.
+9. **Attachments**: take a screenshot (Win+Shift+S), click in the message box and press **Ctrl+V** — it appears as a
+   chip above the box. Drop a PDF or .docx on the box too, or use **📎 Attach**. Ask *"What's in the screenshot, and
+   summarise the PDF"*. Models with vision describe the image; the others say they can't see it.
+10. **New session**: with an empty session open, **＋ New session** does nothing; after a message it creates a session
+   and opens the model picker.
+11. **Statistics**: left bar **Stats** — cost, tokens, votes, win rate, latency per model.
+12. Closing the window keeps MultiChat in the tray (so the runner stays available); right-click the tray icon → Quit.
 
 ## If something goes wrong
 
@@ -96,6 +106,8 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
 | "The server rejected the token" | copy `MULTICHAT_API_TOKEN` exactly from `.env` |
 | Replies say `[error from openrouter: …]` | `OPENROUTER_API_KEY` in `.env`, then `docker compose up -d` to reload; the server must reach openrouter.ai |
 | Model list empty | `docker compose logs server` for config errors; `config.yaml` indentation |
+| All OpenRouter models grey | **Endpoints** → openrouter → status. "rejected the API key": fix `OPENROUTER_API_KEY` in `.env`, `docker compose up -d`, then **Check all keys now**. "no API key": the variable is empty |
+| Attachment refused | 20 MB limit; images must be PNG/JPEG/GIF/WebP/BMP readable by Pillow |
 | runner offline / error | Runner settings has a folder; same URL/token; the server log shows `runner … connected` |
 | "outside the folders this runner is allowed to use" | pick a folder inside one added in Runner settings |
 | Install command fails "needs administrator" | expected — the runner never elevates; run that install yourself |

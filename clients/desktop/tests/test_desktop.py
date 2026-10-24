@@ -35,6 +35,11 @@ endpoints:
       - {name: mock-alpha, display_name: GPT-ish, color: "#10a37f", input_price: 1.25, output_price: 10}
       - {name: mock-beta, display_name: Claude-ish, color: "#d97706", input_price: 4, output_price: 20}
       - {name: mock-gamma, display_name: DeepSeek-ish, color: "#2563eb", input_price: 0.3, output_price: 1.2}
+  - name: keyless
+    kind: openai_compatible
+    base_url: https://api.example.com/v1
+    models:
+      - {name: some-model, display_name: Needs a key, color: "#6b7280"}
 defaults: {approve_edits: ask, approve_commands: auto}
 """
 
@@ -190,6 +195,116 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         win.quitting = True
         win.close()
         win.stats_window.close()
+        await ctl.shutdown()
+
+    run_async(scenario())
+
+
+def test_availability_new_session_and_attachments(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    notes = tmp_path / "notes.md"
+    notes.write_text("# Notes\nThe token expires after 15 minutes.\n")
+
+    async def scenario():
+        from PySide6.QtCore import QMimeData, Qt, QUrl
+        from PySide6.QtGui import QColor, QImage
+
+        from multichat_client.client import MultiChatClient
+        from multichat_desktop import theme
+        from multichat_desktop.attachments import AttachmentView
+        from multichat_desktop.controller import Controller
+        from multichat_desktop.dialogs import EndpointsDialog, ModelsDialog
+        from multichat_desktop.main_window import MainWindow
+
+        theme.apply(QApplication.instance())
+        api = MultiChatClient(server, TOKEN)
+        statuses = {r["name"]: r["status"] for r in await api.check_endpoints()}
+        assert statuses == {"demo": "ok", "keyless": "no_key"}
+        models = {m["model_name"]: m for m in await api.models()}
+        assert not models["some-model"]["available"] and models["mock-alpha"]["available"]
+
+        s = await api.create_session("Attachments", [models["mock-alpha"]["id"]])
+        ctl = Controller(api)
+        win = MainWindow(ctl)
+        win.resize(1300, 860)
+        win.show()
+        await ctl.open_session(s["id"])
+
+        # the unavailable model is greyed out and can't be ticked; search filters the list
+        dlg = ModelsDialog(ctl, win)
+        items = {item.data(0, Qt.ItemDataRole.UserRole): item for _, item in dlg._items()}
+        grey = items[models["some-model"]["id"]]
+        assert not grey.flags() & Qt.ItemFlag.ItemIsUserCheckable and not grey.flags() & Qt.ItemFlag.ItemIsEnabled
+        assert "no API key" in grey.toolTip(0)
+        assert items[models["mock-beta"]["id"]].flags() & Qt.ItemFlag.ItemIsUserCheckable
+        dlg.filter.setText("beta")
+        assert [i.isHidden() for i in (items[models["mock-alpha"]["id"]], items[models["mock-beta"]["id"]])] == [True, False]
+        dlg.filter.clear()
+        dlg.show()
+        await asyncio.sleep(0.2)
+        dlg.grab().save(str(SHOTS / "desktop-models.png"))
+        dlg.reject()
+
+        eps = EndpointsDialog(ctl, win)
+        await until(lambda: eps.list.count() == 2)
+        eps.list.setCurrentRow(next(i for i in range(eps.list.count()) if "keyless" in eps.list.item(i).text()))
+        assert "No API key" in eps.ep_status.text()
+        eps.close()
+
+        # New session on an empty session does nothing
+        win.new_session()
+        await asyncio.sleep(0.3)
+        assert ctl.st.session_id == s["id"]
+        assert len([x for x in await api.sessions() if x["title"] == "New session"]) == 0
+
+        # paste an image from the clipboard and drop a document into the composer
+        img = QImage(320, 200, QImage.Format.Format_RGB32)
+        img.fill(QColor("#2563eb"))
+        pasted = QMimeData()
+        pasted.setImageData(img)
+        assert win.chat.composer.canInsertFromMimeData(pasted)
+        win.chat.composer.insertFromMimeData(pasted)
+        dropped = QMimeData()
+        dropped.setUrls([QUrl.fromLocalFile(str(notes))])
+        win.chat.composer.insertFromMimeData(dropped)
+        text = QMimeData()
+        text.setText("plain text still pastes as text")
+        win.chat.composer.insertFromMimeData(text)
+        assert [a.filename.split("-")[0] for a in win.chat.pending] == ["pasted", "notes.md"]
+        assert win.chat.composer.toPlainText() == "plain text still pastes as text"
+        assert win.chat.pending_widget.isVisibleTo(win)
+        await asyncio.sleep(0.2)
+        win.grab().save(str(SHOTS / "desktop-attach-pending.png"))
+
+        win.chat.composer.setPlainText("What do you see?")
+        win.chat._send_clicked()
+        assert not win.chat.pending and not win.chat.pending_widget.isVisibleTo(win)
+        await until(lambda: not ctl.st.busy and any(m.role == "assistant" and m.status == "complete" for m in ctl.st.messages.values()))
+        user = next(m for m in ctl.st.ordered() if m.role == "user")
+        assert [a["kind"] for a in user.attachments] == ["image", "document"]
+        reply = next(m for m in ctl.st.ordered() if m.role == "assistant")
+        assert "(I see 1 image.)" in reply.content and "notes.md" in reply.content
+        view = win.chat.cards[user.id].attachments
+        assert isinstance(view, AttachmentView)
+        await until(lambda: user.attachments[0]["id"] in ctl.attachment_cache)
+        await asyncio.sleep(0.3)
+        win.grab().save(str(SHOTS / "desktop-attachments.png"))
+
+        # now that the session has messages, New session creates one and asks for its models
+        win.new_session()
+        await until(lambda: ctl.st.session_id != s["id"])
+        await until(lambda: any(isinstance(w, ModelsDialog) and w.isVisible() for w in QApplication.topLevelWidgets()))
+        new_dlg = next(w for w in QApplication.topLevelWidgets() if isinstance(w, ModelsDialog) and w.isVisible())
+        assert new_dlg.windowTitle() == "Models for the new session"
+        assert new_dlg.selected() == [models["mock-alpha"]["id"]]  # carried over (still available)
+        new_dlg.reject()
+        first_new = ctl.st.session_id
+        win.new_session()  # empty again -> ignored
+        await asyncio.sleep(0.3)
+        assert ctl.st.session_id == first_new
+
+        win.quitting = True
+        win.close()
         await ctl.shutdown()
 
     run_async(scenario())

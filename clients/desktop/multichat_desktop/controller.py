@@ -35,6 +35,7 @@ class Controller(QObject):
         self.runner_state = "off"
         self._events_task: asyncio.Task | None = None
         self.recipients: list[int] | None = None
+        self.attachment_cache: dict[int, bytes] = {}
 
     # ---- models & sessions ----
     async def refresh_models(self) -> None:
@@ -68,10 +69,17 @@ class Controller(QObject):
         sid = sessions[0]["id"] if sessions else (await self.client.create_session("New session"))["id"]
         await self.open_session(sid)
 
-    async def new_session(self, title: str = "New session") -> None:
-        ids = [p["model_id"] for p in self.st.participants]
-        s = await self.client.create_session(title, ids, self.st.session.get("context_mode", "isolated"))
+    async def new_session(self, title: str = "New session") -> bool:
+        """Start a new session with the current (still available) models. Returns False and does nothing when the
+        current session is still empty — there is no point in piling up blank sessions."""
+        if self.st.is_empty:
+            return False
+        await self.refresh_models()
+        available = {m["id"] for m in self.models if m["available"] and m["enabled"]}
+        ids = [p["model_id"] for p in self.st.participants if p["model_id"] in available]
+        s = await self.client.create_session(title, ids, self.st.session.get("context_mode", "isolated"), reuse_empty=True)
         await self.open_session(s["id"])
+        return True
 
     async def _follow(self, session_id: int) -> None:
         while True:
@@ -89,12 +97,33 @@ class Controller(QObject):
         self.event.emit({"type": "session", "session": session})
 
     # ---- actions ----
-    def send(self, text: str) -> None:
+    def send(self, text: str, attachments: list | None = None) -> None:
+        """Upload the attachments (PendingAttachment), then start the turn with their ids."""
+        session_id = self.st.session_id
+
         async def go() -> None:
-            async for _ in self.client.chat(self.st.session_id, text, self.recipients):
+            ids = []
+            for att in attachments or []:
+                up = await self.client.upload_attachment(session_id, att.filename, att.data, att.mime)
+                if up["kind"] != "image":
+                    self.attachment_cache[up["id"]] = att.data  # images come back resized; fetch those
+                ids.append(up["id"])
+            async for _ in self.client.chat(session_id, text, self.recipients, ids):
                 pass  # events arrive through the session subscription
 
         spawn(go(), lambda exc: self.error.emit(getattr(exc, "detail", str(exc))))
+
+    def fetch_attachment(self, attachment_id: int, on_done) -> None:  # noqa: ANN001
+        if attachment_id in self.attachment_cache:
+            on_done(self.attachment_cache[attachment_id])
+            return
+
+        async def go() -> bytes:
+            data = await self.client.attachment(attachment_id)
+            self.attachment_cache[attachment_id] = data
+            return data
+
+        self.call(go(), on_done)
 
     def call(self, coro, on_done=None) -> None:  # noqa: ANN001
         async def go() -> None:

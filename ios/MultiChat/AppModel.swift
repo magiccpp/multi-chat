@@ -67,15 +67,28 @@ final class AppModel {
         }
     }
 
+    /// Starts a session. If the latest one is still empty the server reuses it instead of adding another blank one.
     func newSession(title: String = "New session", modelIds: [Int], contextMode: String) async -> Session? {
         guard let api else { return nil }
         do {
-            let s = try await api.createSession(title: title, modelIds: modelIds, contextMode: contextMode)
+            let s = try await api.createSession(title: title, modelIds: modelIds, contextMode: contextMode, reuseEmpty: true)
+            sessions.removeAll { $0.id == s.id }
             sessions.insert(s, at: 0)
             return s
         } catch {
             self.error = error.localizedDescription
             return nil
+        }
+    }
+
+    /// Ask the server to re-check keys and vendor model lists, then reload the models.
+    func checkAvailability() async {
+        guard let api else { return }
+        do {
+            _ = try await api.checkEndpoints()
+            models = try await api.models()
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 

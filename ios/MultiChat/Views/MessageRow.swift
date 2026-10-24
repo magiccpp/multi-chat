@@ -32,6 +32,9 @@ struct MessageRow: View {
             } else if message.status == "streaming" && (message.toolCalls ?? []).isEmpty {
                 Text("thinking…").italic().foregroundStyle(.secondary)
             }
+            if !message.attachments.isEmpty {
+                AttachmentsView(model: model, attachments: message.attachments)
+            }
             ForEach(message.toolCalls ?? [], id: \.id) { call in
                 ToolCallView(call: call, result: state.results[call.id]?.content ?? state.progress[call.id], expanded: expanded)
             }
@@ -199,5 +202,95 @@ struct DiffSheet: View {
         if line.hasPrefix("+") && !line.hasPrefix("+++") { return .green.opacity(0.12) }
         if line.hasPrefix("-") && !line.hasPrefix("---") { return .red.opacity(0.12) }
         return .clear
+    }
+}
+
+/// Attachments of a message: image thumbnails (tap to view) and document chips (tap to share / open).
+struct AttachmentsView: View {
+    let model: SessionModel
+    let attachments: [AttachmentInfo]
+    @State private var preview: PreviewItem?
+
+    struct PreviewItem: Identifiable {
+        let id: Int
+        let filename: String
+        let image: UIImage?
+        let url: URL?
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { a in
+                    if a.isImage {
+                        AttachmentThumbnail(model: model, attachment: a) { image in
+                            preview = PreviewItem(id: a.id, filename: a.filename, image: image, url: nil)
+                        }
+                    } else {
+                        Button { open(a) } label: {
+                            Label("\(a.filename) · \(ByteCountFormatter.string(fromByteCount: Int64(a.size), countStyle: .file))",
+                                  systemImage: a.kind == "document" ? "doc.text" : "shippingbox")
+                                .font(.caption).lineLimit(1)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(Color.secondary.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .sheet(item: $preview) { item in
+            NavigationStack {
+                Group {
+                    if let image = item.image {
+                        ScrollView([.horizontal, .vertical]) { Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity) }
+                    } else if let url = item.url {
+                        ShareLink(item: url) { Label("Share or open \(item.filename)", systemImage: "square.and.arrow.up") }
+                    }
+                }
+                .navigationTitle(item.filename)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { preview = nil } }
+                    ToolbarItem(placement: .primaryAction) {
+                        if let image = item.image {
+                            ShareLink(item: Image(uiImage: image), preview: SharePreview(item.filename, image: Image(uiImage: image)))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func open(_ a: AttachmentInfo) {
+        Task {
+            guard let data = await model.attachmentData(a.id) else { return }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent((a.filename as NSString).lastPathComponent)
+            try? data.write(to: url)
+            preview = PreviewItem(id: a.id, filename: a.filename, image: nil, url: url)
+        }
+    }
+}
+
+struct AttachmentThumbnail: View {
+    let model: SessionModel
+    let attachment: AttachmentInfo
+    let tapped: (UIImage) -> Void
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                ZStack { Color.secondary.opacity(0.12); ProgressView() }
+            }
+        }
+        .frame(width: 120, height: 90)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture { if let image { tapped(image) } }
+        .task {
+            if image == nil, let data = await model.attachmentData(attachment.id) { image = UIImage(data: data) }
+        }
     }
 }

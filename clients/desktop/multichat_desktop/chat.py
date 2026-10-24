@@ -6,9 +6,10 @@ import html
 import re
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from multichat_client.state import MessageView
+from multichat_desktop import attachments as att_mod
+from multichat_desktop.attachments import AttachmentView, PendingAttachment, PendingChip
 from multichat_desktop.controller import Controller
 from multichat_desktop.theme import colors
 
@@ -68,6 +71,10 @@ class MessageCard(QFrame):
         self.body.setOpenExternalLinks(True)
         self.body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.body)
+        self.attachments: AttachmentView | None = None
+        if self.view.attachments:
+            self.attachments = AttachmentView(ctl, self.view.attachments)
+            layout.addWidget(self.attachments)
 
         self.tools = QLabel()
         self.tools.setTextFormat(Qt.TextFormat.RichText)
@@ -196,19 +203,37 @@ class ApprovalCard(QFrame):
 
 
 class Composer(QPlainTextEdit):
-    submitted = Signal(str)
+    """Message box. Enter sends; pasting or dropping images/files attaches them instead of inserting text."""
+
+    submitted = Signal()
+    attached = Signal(list)  # list[PendingAttachment]
+    attach_failed = Signal(str)
 
     def keyPressEvent(self, e: QKeyEvent) -> None:  # noqa: N802 - Qt API
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (e.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-            text = self.toPlainText().strip()
-            if text:
-                self.submitted.emit(text)
-                self.clear()
+            self.submitted.emit()
             return
         super().keyPressEvent(e)
 
+    def canInsertFromMimeData(self, source: QMimeData) -> bool:  # noqa: N802 - Qt API
+        return att_mod.has_attachments(source) or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802 - Qt API (paste and drop)
+        if att_mod.has_attachments(source):
+            try:
+                found = att_mod.from_mime(source)
+            except (OSError, ValueError) as exc:
+                self.attach_failed.emit(str(exc))
+                return
+            if found:
+                self.attached.emit(found)
+                return
+        super().insertFromMimeData(source)
+
 
 class ChatPanel(QWidget):
+    PLACEHOLDER = "Message the models…  (Enter to send, Shift+Enter for a new line, Ctrl+V pastes images)"
+
     def __init__(self, ctl: Controller) -> None:
         super().__init__()
         self.ctl = ctl
@@ -242,11 +267,22 @@ class ChatPanel(QWidget):
         layout.addWidget(chips_widget)
         self.chips: dict[int, QPushButton] = {}
 
+        # attachments waiting to be sent with the next message
+        self.pending: list[PendingAttachment] = []
+        self.pending_row = QHBoxLayout()
+        self.pending_row.setContentsMargins(8, 0, 8, 0)
+        self.pending_widget = QWidget()
+        self.pending_widget.setLayout(self.pending_row)
+        self.pending_widget.setVisible(False)
+        layout.addWidget(self.pending_widget)
+
         self.composer = Composer()
         self.composer.setObjectName("composer")
-        self.composer.setPlaceholderText("Message the models…  (Enter to send, Shift+Enter for a new line)")
+        self.composer.setPlaceholderText(self.PLACEHOLDER)
         self.composer.setFixedHeight(86)
-        self.composer.submitted.connect(self._send)
+        self.composer.submitted.connect(self._send_clicked)
+        self.composer.attached.connect(self.add_attachments)
+        self.composer.attach_failed.connect(ctl.error.emit)
         bottom = QHBoxLayout()
         bottom.setContentsMargins(8, 4, 8, 8)
         bottom.addWidget(self.composer, 1)
@@ -254,9 +290,13 @@ class ChatPanel(QWidget):
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("primary")
         self.send_btn.clicked.connect(self._send_clicked)
+        self.attach_btn = QPushButton("📎 Attach")
+        self.attach_btn.setToolTip("Attach documents or images (you can also paste images with Ctrl+V or drop files here)")
+        self.attach_btn.clicked.connect(self.choose_files)
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(ctl.stop)
         buttons.addWidget(self.send_btn)
+        buttons.addWidget(self.attach_btn)
         buttons.addWidget(self.stop_btn)
         bottom.addLayout(buttons)
         layout.addLayout(bottom)
@@ -326,7 +366,7 @@ class ChatPanel(QWidget):
         self.stop_btn.setEnabled(self.ctl.st.busy)
         builder = self.ctl.st.session.get("builder_model_id")
         self.composer.setPlaceholderText(
-            f"Tell {self.ctl.st.name(builder)} what to build…" if build else "Message the models…  (Enter to send, Shift+Enter for a new line)"
+            f"Tell {self.ctl.st.name(builder)} what to build…" if build else self.PLACEHOLDER
         )
 
     def _add_card(self, message_id: int) -> None:
@@ -361,14 +401,51 @@ class ChatPanel(QWidget):
         if at_end:
             QTimer.singleShot(0, self._scroll_end)
 
+    # ---- sending & attachments ----
     def _send_clicked(self) -> None:
         text = self.composer.toPlainText().strip()
+        if not text and not self.pending:
+            return
         self.composer.clear()
-        self._send(text)
+        pending, self.pending = self.pending, []
+        self._rebuild_pending()
+        self.ctl.send(text, pending)
 
-    def _send(self, text: str) -> None:
-        if text:
-            self.ctl.send(text)
+    def choose_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Attach files", "",
+            "Documents and images (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf *.docx *.txt *.md *.csv *.json *.yaml *.yml "
+            "*.xml *.html *.log *.py *.js *.ts *.cs *.java *.go *.rs *.c *.cpp *.h *.sql *.ps1 *.sh);;All files (*)",
+        )
+        found = []
+        for path in paths:
+            try:
+                found.append(att_mod.from_path(path))
+            except (OSError, ValueError) as exc:
+                self.ctl.error.emit(str(exc))
+        self.add_attachments(found)
+
+    def add_attachments(self, items: list[PendingAttachment]) -> None:
+        self.pending.extend(items)
+        self._rebuild_pending()
+        self.composer.setFocus()
+
+    def _remove_pending(self, chip: PendingChip) -> None:
+        if chip.att in self.pending:
+            self.pending.remove(chip.att)
+        self._rebuild_pending()
+
+    def _rebuild_pending(self) -> None:
+        while self.pending_row.count():
+            item = self.pending_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for att in self.pending:
+            chip = PendingChip(att)
+            chip.removed.connect(self._remove_pending)
+            self.pending_row.addWidget(chip)
+        self.pending_row.addStretch(1)
+        self.pending_widget.setVisible(bool(self.pending))
 
     # ---- events ----
     def _owner(self, call_id: str) -> int | None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from typing import Any
 
@@ -87,54 +88,137 @@ class ConnectDialog(QDialog):
 
 
 class ModelsDialog(QDialog):
-    """Pick the models (from any endpoint) that join this session; can be changed any time."""
+    """Pick the models (from any endpoint) that join this session; can be changed any time.
 
-    def __init__(self, ctl: Controller, parent: QWidget | None = None) -> None:
+    Models the server currently can't use (no or rejected key, not offered by the vendor) are greyed out and can't be
+    ticked; the tooltip says why. A model already in the session stays tickable so it can be removed."""
+
+    def __init__(self, ctl: Controller, parent: QWidget | None = None, title: str = "Models in this session") -> None:
         super().__init__(parent)
         self.ctl = ctl
-        self.setWindowTitle("Models in this session")
-        self.resize(520, 560)
+        self.setWindowTitle(title)
+        self.resize(640, 620)
         layout = QVBoxLayout(self)
-        note = QLabel("Tick the models that take part. Agent CLIs (Claude Code, Cursor, Copilot) run where the folder is, "
-                      "so they need a folder on this PC (runner) or an SSH host.")
+        note = QLabel("Tick the models that take part. Greyed-out models are unavailable right now (hover for the reason). "
+                      "Agent CLIs (Claude Code, Cursor, Copilot) run where the folder is, so they need a folder on this PC "
+                      "(runner) or an SSH host.")
         note.setWordWrap(True)
         note.setObjectName("muted")
         layout.addWidget(note)
+        row = QHBoxLayout()
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Search models…")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.textChanged.connect(self._apply_filter)
+        self.only_available = QCheckBox("Available only")
+        self.only_available.toggled.connect(self._apply_filter)
+        self.refresh_btn = QPushButton("Check availability")
+        self.refresh_btn.setToolTip("Ask the server to re-check every endpoint's key and model list now")
+        self.refresh_btn.clicked.connect(self._recheck)
+        row.addWidget(self.filter, 1)
+        row.addWidget(self.only_available)
+        row.addWidget(self.refresh_btn)
+        layout.addLayout(row)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Model", "Vendor id", "$ in / out per 1M"])
+        self.tree.itemChanged.connect(lambda *_: self._update_count())
         layout.addWidget(self.tree, 1)
-        current = {p["model_id"] for p in ctl.st.participants}
-        groups: dict[str, QTreeWidgetItem] = {}
-        for m in ctl.models:
-            if not m["enabled"]:
-                continue
-            group = groups.get(m["endpoint_name"])
-            if group is None:
-                group = QTreeWidgetItem([m["endpoint_name"] + ("  (agent CLI)" if m["endpoint_kind"] == "agent_cli" else "")])
-                group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                groups[m["endpoint_name"]] = group
-                self.tree.addTopLevelItem(group)
-            item = QTreeWidgetItem([m["display_name"], m["model_name"], f"{m['input_price']:g} / {m['output_price']:g}"])
-            item.setForeground(0, QColor(m["color"]))
-            item.setCheckState(0, Qt.CheckState.Checked if m["id"] in current else Qt.CheckState.Unchecked)
-            item.setData(0, Qt.ItemDataRole.UserRole, m["id"])
-            group.addChild(item)
-        self.tree.expandAll()
-        self.tree.resizeColumnToContents(0)
+        self.count = QLabel()
+        self.count.setObjectName("muted")
+        layout.addWidget(self.count)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._fill({p["model_id"] for p in ctl.st.participants})
 
-    def selected(self) -> list[int]:
-        ids = []
+    def _fill(self, checked: set[int]) -> None:
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        endpoints: dict[str, list[dict]] = {}
+        for m in self.ctl.models:
+            if m["enabled"] or m["id"] in checked:
+                endpoints.setdefault(m["endpoint_name"], []).append(m)
+        grey = QColor("#9ca3af")
+        # endpoints with something usable first, then alphabetical
+        for name, models in sorted(endpoints.items(), key=lambda kv: (not any(m["available"] for m in kv[1]), kv[0])):
+            usable = sum(1 for m in models if m["available"])
+            kind = "  (agent CLI)" if models[0]["endpoint_kind"] == "agent_cli" else ""
+            group = QTreeWidgetItem([f"{name}{kind}  ·  {usable}/{len(models)} available"])
+            group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            if not usable:
+                group.setForeground(0, grey)
+                group.setToolTip(0, models[0].get("availability_detail") or "unavailable")
+            self.tree.addTopLevelItem(group)
+            for m in sorted(models, key=lambda m: (m["id"] not in checked, not m["available"], m["display_name"].lower())):
+                item = QTreeWidgetItem([m["display_name"], m["model_name"], f"{m['input_price']:g} / {m['output_price']:g}"])
+                item.setData(0, Qt.ItemDataRole.UserRole, m["id"])
+                item.setData(1, Qt.ItemDataRole.UserRole, m["available"])
+                item.setCheckState(0, Qt.CheckState.Checked if m["id"] in checked else Qt.CheckState.Unchecked)
+                if m["available"]:
+                    item.setForeground(0, QColor(m["color"]))
+                else:
+                    reason = m.get("availability_detail") or "unavailable"
+                    for col in range(3):
+                        item.setForeground(col, grey)
+                        item.setToolTip(col, f"Unavailable: {reason}")
+                    if m["id"] not in checked:  # can't be added; one already in the session can still be removed
+                        item.setFlags(item.flags() & ~(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled))
+                    else:
+                        item.setText(0, f"{m['display_name']}  (unavailable)")
+                group.addChild(item)
+            group.setExpanded(len(models) <= 40 or any(m["id"] in checked for m in models))
+        self.tree.resizeColumnToContents(0)
+        self.tree.blockSignals(False)
+        self._apply_filter()
+
+    def _items(self):  # noqa: ANN202
         for i in range(self.tree.topLevelItemCount()):
             group = self.tree.topLevelItem(i)
             for j in range(group.childCount()):
-                item = group.child(j)
-                if item.checkState(0) == Qt.CheckState.Checked:
-                    ids.append(item.data(0, Qt.ItemDataRole.UserRole))
-        return ids
+                yield group, group.child(j)
+
+    def _apply_filter(self) -> None:
+        words = self.filter.text().lower().split()
+        only = self.only_available.isChecked()
+        visible: dict[int, int] = {}
+        for i in range(self.tree.topLevelItemCount()):
+            visible[i] = 0
+        for group, item in self._items():
+            text = f"{item.text(0)} {item.text(1)} {group.text(0)}".lower()
+            show = all(w in text for w in words) and (not only or item.data(1, Qt.ItemDataRole.UserRole)
+                                                      or item.checkState(0) == Qt.CheckState.Checked)
+            item.setHidden(not show)
+            visible[self.tree.indexOfTopLevelItem(group)] += show
+        for i, n in visible.items():
+            group = self.tree.topLevelItem(i)
+            group.setHidden(n == 0)
+            if words and n:
+                group.setExpanded(True)
+        self._update_count()
+
+    def _update_count(self) -> None:
+        total = sum(1 for _, item in self._items() if item.data(1, Qt.ItemDataRole.UserRole))
+        self.count.setText(f"{len(self.selected())} selected · {total} models available")
+
+    def _recheck(self) -> None:
+        checked = set(self.selected())
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("Checking…")
+
+        async def go() -> None:
+            await self.ctl.client.check_endpoints()
+            await self.ctl.refresh_models()
+
+        def done(_: Any) -> None:
+            self.refresh_btn.setEnabled(True)
+            self.refresh_btn.setText("Check availability")
+            self._fill(checked)
+
+        self.ctl.call(go(), done)
+
+    def selected(self) -> list[int]:
+        return [item.data(0, Qt.ItemDataRole.UserRole) for _, item in self._items() if item.checkState(0) == Qt.CheckState.Checked]
 
     def _save(self) -> None:
         keep = [p["model_id"] for p in self.ctl.st.participants]
@@ -146,7 +230,8 @@ class ModelsDialog(QDialog):
 class EndpointsDialog(QDialog):
     """Endpoints (vendor URL + key) and their models. Rows from config.yaml on the server are read-only."""
 
-    COLS = ["Display name", "Vendor id", "Color", "$ in /1M", "$ out /1M", "Enabled"]
+    COLS = ["Display name", "Vendor id", "Color", "$ in /1M", "$ out /1M", "Enabled", "Available"]
+    STATUS = {"ok": ("●", "#16a34a"), "error": ("●", "#dc2626"), "no_key": ("●", "#d97706"), "unchecked": ("○", "#9ca3af")}
 
     def __init__(self, ctl: Controller, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -167,6 +252,10 @@ class EndpointsDialog(QDialog):
         self.preset = QComboBox()
         add = QPushButton("Add endpoint")
         add.clicked.connect(self._add_endpoint)
+        self.check_all_btn = QPushButton("Check all keys now")
+        self.check_all_btn.setToolTip("Re-check every endpoint's key and fetch the vendors' model lists")
+        self.check_all_btn.clicked.connect(self._check_all)
+        ll.addWidget(self.check_all_btn)
         ll.addWidget(QLabel("New endpoint from preset:"))
         ll.addWidget(self.preset)
         ll.addWidget(add)
@@ -188,10 +277,17 @@ class EndpointsDialog(QDialog):
         form.addRow("Kind", self.kind)
         form.addRow("Base URL", self.base_url)
         form.addRow("API key", self.api_key)
+        self.ep_status = QLabel()
+        self.ep_status.setWordWrap(True)
+        self.ep_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addRow("Status", self.ep_status)
+        self.auto_models = QCheckBox("Import the vendor's chat models automatically")
+        self.auto_models.setToolTip("The server adds every chat model the vendor offers (OpenRouter: with prices)")
+        form.addRow("", self.auto_models)
         rl.addLayout(form)
         row = QHBoxLayout()
         self.save_btn = QPushButton("Save")
-        self.test_btn = QPushButton("Test")
+        self.test_btn = QPushButton("Check now")
         self.delete_btn = QPushButton("Delete")
         self.save_btn.clicked.connect(self._save_endpoint)
         self.test_btn.clicked.connect(self._test)
@@ -236,9 +332,11 @@ class EndpointsDialog(QDialog):
                 self.preset.addItem(p["name"], p)
             self.list.clear()
             for e in self.endpoints:
-                item = QListWidgetItem(e["name"] + ("" if e["enabled"] else " (disabled)"))
-                if e["source"] == "config":
-                    item.setToolTip("from config.yaml")
+                dot, color = self.STATUS.get(e.get("status", "unchecked"), self.STATUS["unchecked"])
+                item = QListWidgetItem(f"{dot}  {e['name']}" + ("" if e["enabled"] else " (disabled)"))
+                item.setForeground(QColor(color if e["enabled"] else "#9ca3af"))
+                tip = e.get("status_detail") or e.get("status", "")
+                item.setToolTip(tip + ("\nfrom config.yaml" if e["source"] == "config" else ""))
                 self.list.addItem(item)
             if self.endpoints:
                 index = next((i for i, e in enumerate(self.endpoints) if e["id"] == select), 0)
@@ -261,24 +359,39 @@ class EndpointsDialog(QDialog):
         self.base_url.setText(e.get("base_url") or "")
         self.api_key.clear()
         self.api_key.setPlaceholderText(e.get("api_key_masked") or "no key")
-        for w in (self.name, self.base_url, self.api_key, self.save_btn, self.delete_btn):
+        self._show_status(e)
+        self.auto_models.setChecked(bool(e.get("auto_models")))
+        for w in (self.name, self.base_url, self.api_key, self.save_btn, self.delete_btn, self.auto_models):
             w.setEnabled(editable)
         self.status.clear()
         self._fill_models(e)
 
+    def _show_status(self, e: dict) -> None:
+        label = {"ok": "OK", "error": "Error", "no_key": "No API key", "unchecked": "Not checked yet"}.get(e.get("status", ""), e.get("status", ""))
+        _, color = self.STATUS.get(e.get("status", "unchecked"), self.STATUS["unchecked"])
+        when = (e.get("checked_at") or "")[:19].replace("T", " ")
+        detail = html.escape(e.get("status_detail") or "")
+        self.ep_status.setText(f"<span style='color:{color}'>●</span> <b>{label}</b>"
+                               + (f" — {detail}" if detail else "") + (f" <span style='color:#9ca3af'>({when} UTC)</span>" if when else ""))
+
     def _fill_models(self, e: dict) -> None:
         self._loading = True
-        models = [m for m in self.ctl.models if m["endpoint_id"] == e["id"]]
+        models = sorted((m for m in self.ctl.models if m["endpoint_id"] == e["id"]), key=lambda m: (not m["available"], m["display_name"].lower()))
         self.table.setRowCount(len(models))
+        grey = QColor("#9ca3af")
         for r, m in enumerate(models):
-            values = [m["display_name"], m["model_name"], m["color"], f"{m['input_price']:g}", f"{m['output_price']:g}", "yes" if m["enabled"] else "no"]
+            values = [m["display_name"], m["model_name"], m["color"], f"{m['input_price']:g}", f"{m['output_price']:g}",
+                      "yes" if m["enabled"] else "no", "yes" if m["available"] else "no"]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, m["id"])
-                if m["source"] == "config" or col == 1:
+                if m["source"] == "config" or col in (1, 6):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col == 2:
                     item.setForeground(QColor(m["color"]))
+                elif not m["available"]:
+                    item.setForeground(grey)
+                    item.setToolTip(f"Unavailable: {m.get('availability_detail') or ''}")
                 self.table.setItem(r, col, item)
         self.table.resizeColumnsToContents()
         self._loading = False
@@ -318,7 +431,8 @@ class EndpointsDialog(QDialog):
         e = self.current()
         if e is None:
             return
-        body: dict[str, Any] = {"name": self.name.text().strip(), "base_url": self.base_url.text().strip()}
+        body: dict[str, Any] = {"name": self.name.text().strip(), "base_url": self.base_url.text().strip(),
+                                "auto_models": self.auto_models.isChecked()}
         if self.api_key.text():
             body["api_key"] = self.api_key.text()
         self.ctl.call(self.ctl.client.update_endpoint(e["id"], **body), lambda r: (self.status.setText("saved"), self.reload(r["id"])))
@@ -326,8 +440,27 @@ class EndpointsDialog(QDialog):
     def _test(self) -> None:
         e = self.current()
         if e:
-            self.status.setText("testing…")
-            self.ctl.call(self.ctl.client.test_endpoint(e["id"]), lambda r: self.status.setText(("✓ " if r["ok"] else "✗ ") + r["detail"][:120]))
+            self.status.setText("checking key and model list…")
+            self.ctl.call(self._recheck(e["id"]), lambda r: (self.status.setText(("✓ " if r["status"] == "ok" else "✗ ") + r["detail"][:120]),
+                                                            self.reload(e["id"])))
+
+    async def _recheck(self, endpoint_id: int | None = None) -> Any:
+        result = await self.ctl.client.check_endpoints(endpoint_id)
+        await self.ctl.refresh_models()
+        return result
+
+    def _check_all(self) -> None:
+        self.check_all_btn.setEnabled(False)
+        self.status.setText("checking all endpoints…")
+        e = self.current()
+
+        def done(results: list[dict]) -> None:
+            self.check_all_btn.setEnabled(True)
+            bad = [r for r in results if r["status"] != "ok"]
+            self.status.setText(f"{len(results) - len(bad)} of {len(results)} endpoints OK")
+            self.reload(e["id"] if e else None)
+
+        self.ctl.call(self._recheck(), done)
 
     def _delete(self) -> None:
         e = self.current()

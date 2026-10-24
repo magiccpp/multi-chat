@@ -2,6 +2,17 @@ import Foundation
 import MultiChatKit
 import Observation
 
+/// A document or image picked in the composer, uploaded when the message is sent.
+struct PendingAttachment: Identifiable, Hashable {
+    static let maxSize = 20 * 1024 * 1024
+    let id = UUID()
+    var filename: String
+    var mime: String?
+    var data: Data
+
+    var isImage: Bool { mime?.hasPrefix("image/") ?? false }
+}
+
 /// One open session: loads history from the server, follows live events, and performs actions.
 @MainActor
 @Observable
@@ -12,6 +23,8 @@ final class SessionModel {
     var tabModel: Int?  // nil = All
     var recipients: Set<Int> = []  // empty = everyone
     var draft = ""
+    var pending: [PendingAttachment] = []  // sent with the next message
+    var sending = false
     var error: String?
     var loaded = false
     var scrollTick = 0  // bumped on new content so the chat can follow the bottom
@@ -80,12 +93,43 @@ final class SessionModel {
 
     // MARK: actions
 
+    var canSend: Bool { !sending && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pending.isEmpty) }
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard canSend else { return }
+        let files = pending
         draft = ""
+        pending = []
         let to = recipients.isEmpty || isBuild ? nil : Array(recipients)
-        run { try await self.api.chat(self.sessionId, content: text, recipients: to) }
+        sending = !files.isEmpty
+        run {
+            defer { self.sending = false }
+            var ids: [Int] = []
+            for f in files {
+                ids.append(try await self.api.uploadAttachment(self.sessionId, filename: f.filename, data: f.data, mime: f.mime).id)
+            }
+            self.sending = false
+            try await self.api.chat(self.sessionId, content: text, recipients: to, attachmentIds: ids)
+        }
+    }
+
+    func attach(_ file: PendingAttachment) {
+        guard file.data.count <= PendingAttachment.maxSize else {
+            error = "\(file.filename) is larger than 20 MB"
+            return
+        }
+        pending.append(file)
+    }
+
+    /// Attachment bytes, downloaded once (thumbnails and previews).
+    private var attachmentCache: [Int: Data] = [:]
+
+    func attachmentData(_ id: Int) async -> Data? {
+        if let data = attachmentCache[id] { return data }
+        guard let data = try? await api.attachmentData(id) else { return nil }
+        attachmentCache[id] = data
+        return data
     }
 
     func vote(_ message: Message, _ value: Int) {

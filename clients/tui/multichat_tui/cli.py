@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -75,8 +76,19 @@ async def cmd_run(args: argparse.Namespace) -> int:
         session = await c.session(sid)
         st = SessionState()
         st.load(session, [], [], models)
+        attachment_ids = []
+        for path in args.attach or []:
+            p = Path(path).expanduser()
+            if not p.is_file():
+                console.print(f"[red]no such file: {path}[/]")
+                return 2
+            try:
+                attachment_ids.append((await c.upload_attachment(sid, p.name, p.read_bytes()))["id"])
+            except ApiError as exc:
+                console.print(f"[red]{p.name}: {exc.detail}[/]")
+                return 1
         finished: list[MessageView] = []
-        async for ev in c.chat(sid, args.prompt):
+        async for ev in c.chat(sid, args.prompt, attachment_ids=attachment_ids):
             st.apply(ev)
             if ev["type"] == "message_end":
                 m = st.messages[ev["message"]["id"]]
@@ -104,7 +116,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
 def _resolve(name: str, models: list[dict]) -> dict:
     m = match_model(name, models)
     if m is None:
-        console.print(f"[red]No model matches {name!r}.[/] Known: " + ", ".join(x["display_name"] for x in models))
+        console.print(f"[red]No model matches {name!r}.[/] Known: " + ", ".join(x["display_name"] for x in models if x["available"]))
+        sys.exit(2)
+    if not m["available"]:
+        console.print(f"[red]{m['display_name']} is unavailable right now:[/] {m.get('availability_detail') or '?'}")
         sys.exit(2)
     return m
 
@@ -191,6 +206,8 @@ async def cmd_models(args: argparse.Namespace) -> int:
     async with _client(args) as c:
         for m in await c.models():
             state = "" if m["enabled"] else " [dim](disabled)[/]"
+            if not m["available"]:
+                state += f" [grey50](unavailable: {m.get('availability_detail') or '?'})[/]"
             console.print(f"[{m['color']}]●[/] [bold]{m['display_name']}[/]  [dim]{m['endpoint_name']} · {m['model_name']} · "
                           f"${m['input_price']}/${m['output_price']} per 1M[/]{state}")
         return 0
@@ -252,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--folder", help="ssh:<connection>:<path> or runner:<name>:<path>")
     r.add_argument("--json", action="store_true")
     r.add_argument("--session", type=int, dest="session")
+    r.add_argument("--attach", action="append", metavar="FILE", help="attach a document or image (repeatable)")
 
     v = sub.add_parser("vote", help="vote on a reply")
     v.add_argument("ref", help="message id, or #n (per-session index)")

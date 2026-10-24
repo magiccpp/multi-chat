@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -88,6 +90,11 @@ class MultiChatClient:
     async def test_endpoint(self, endpoint_id: int) -> dict:
         return await self._req("POST", f"/api/endpoints/{endpoint_id}/test")
 
+    async def check_endpoints(self, endpoint_id: int | None = None) -> Any:
+        """Re-check keys and vendor model lists now (one endpoint, or all → list of statuses)."""
+        path = f"/api/endpoints/{endpoint_id}/check" if endpoint_id is not None else "/api/endpoints/check"
+        return await self._req("POST", path, timeout=120)
+
     async def available_models(self, endpoint_id: int) -> list[dict]:
         return await self._req("GET", f"/api/endpoints/{endpoint_id}/available-models")
 
@@ -141,8 +148,10 @@ class MultiChatClient:
         model_ids: list[int] | None = None,
         context_mode: str = "isolated",
         workspace: dict | None = None,
+        reuse_empty: bool = False,
     ) -> dict:
-        body = {"title": title, "model_ids": model_ids or [], "context_mode": context_mode}
+        """`reuse_empty` returns the latest session instead when it has no messages yet."""
+        body = {"title": title, "model_ids": model_ids or [], "context_mode": context_mode, "reuse_empty": reuse_empty}
         if workspace:
             body["workspace"] = workspace
         return await self._req("POST", "/api/sessions", json=body)
@@ -168,9 +177,30 @@ class MultiChatClient:
     async def usage(self, session_id: int) -> list[dict]:
         return await self._req("GET", f"/api/sessions/{session_id}/usage")
 
-    async def chat(self, session_id: int, content: str, recipients: list[int] | None = None) -> AsyncIterator[dict]:
+    async def upload_attachment(self, session_id: int, filename: str, data: bytes, mime: str | None = None) -> dict:
+        """Upload a file or image; pass the returned id to `chat(attachment_ids=...)`."""
+        body = {
+            "filename": filename,
+            "mime": mime or mimetypes.guess_type(filename)[0],
+            "data_base64": base64.b64encode(data).decode(),
+        }
+        return await self._req("POST", f"/api/sessions/{session_id}/attachments", json=body, timeout=120)
+
+    async def attachment(self, attachment_id: int) -> bytes:
+        resp = await self.http.get(f"/api/attachments/{attachment_id}")
+        if resp.status_code >= 400:
+            raise ApiError(resp.status_code, resp.text)
+        return resp.content
+
+    async def chat(
+        self,
+        session_id: int,
+        content: str,
+        recipients: list[int] | None = None,
+        attachment_ids: list[int] | None = None,
+    ) -> AsyncIterator[dict]:
         """Start a turn; yields its events until `turn_end`."""
-        body = {"content": content, "recipients": recipients}
+        body = {"content": content, "recipients": recipients, "attachment_ids": attachment_ids or []}
         async with self.http.stream("POST", f"/api/sessions/{session_id}/chat", json=body) as resp:
             if resp.status_code >= 400:
                 await resp.aread()

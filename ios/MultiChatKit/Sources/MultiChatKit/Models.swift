@@ -15,6 +15,47 @@ public struct ModelInfo: Codable, Hashable, Identifiable, Sendable {
     public var enabled: Bool
     public var supportsTools: Bool
     public var source: String
+    /// False when the server can't use the model right now (no or rejected key, not offered by the vendor).
+    public var available: Bool = true
+    public var availabilityDetail: String = ""
+    public var supportsImages: Bool = true
+}
+
+extension ModelInfo {
+    enum CodingKeys: String, CodingKey {
+        case id, endpointId, endpointName, endpointKind, modelName, displayName, color, inputPrice, outputPrice, enabled,
+             supportsTools, source, available, availabilityDetail, supportsImages
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        endpointId = try c.decode(Int.self, forKey: .endpointId)
+        endpointName = try c.decode(String.self, forKey: .endpointName)
+        endpointKind = try c.decode(String.self, forKey: .endpointKind)
+        modelName = try c.decode(String.self, forKey: .modelName)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        color = try c.decode(String.self, forKey: .color)
+        inputPrice = try c.decode(Double.self, forKey: .inputPrice)
+        outputPrice = try c.decode(Double.self, forKey: .outputPrice)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        supportsTools = try c.decodeIfPresent(Bool.self, forKey: .supportsTools) ?? true
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? "api"
+        available = try c.decodeIfPresent(Bool.self, forKey: .available) ?? true
+        availabilityDetail = try c.decodeIfPresent(String.self, forKey: .availabilityDetail) ?? ""
+        supportsImages = try c.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? true
+    }
+}
+
+/// A file attached to a user message (images are shown, documents are read by the models).
+public struct AttachmentInfo: Codable, Hashable, Identifiable, Sendable {
+    public var id: Int
+    public var filename: String
+    public var mime: String
+    public var size: Int
+    public var kind: String  // image | document | binary
+
+    public var isImage: Bool { kind == "image" }
 }
 
 public struct Endpoint: Codable, Hashable, Identifiable, Sendable {
@@ -26,6 +67,17 @@ public struct Endpoint: Codable, Hashable, Identifiable, Sendable {
     public var apiKeyMasked: String?
     public var source: String
     public var enabled: Bool
+    /// unchecked | ok | no_key | error — the server checks keys and model lists at start-up and periodically.
+    public var status: String?
+    public var statusDetail: String?
+    public var checkedAt: String?
+}
+
+public struct EndpointStatus: Codable, Hashable, Sendable {
+    public var id: Int
+    public var name: String
+    public var status: String
+    public var detail: String
 }
 
 public struct Participant: Codable, Hashable, Sendable {
@@ -77,9 +129,10 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var recipients: [Int]?
     public var status: String
     public var vote: Int
+    public var attachments: [AttachmentInfo]
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote
+        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote, attachments
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +149,7 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
         recipients = try c.decodeIfPresent([Int].self, forKey: .recipients)
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "complete"
         vote = try c.decodeIfPresent(Int.self, forKey: .vote) ?? 0
+        attachments = try c.decodeIfPresent([AttachmentInfo].self, forKey: .attachments) ?? []
     }
 
     public var isReply: Bool { role == "assistant" }

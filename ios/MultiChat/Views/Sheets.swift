@@ -7,6 +7,7 @@ struct ModelsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let model: SessionModel
     @State private var selected: Set<Int> = []
+    @State private var query = ""
 
     init(model: SessionModel) {
         self.model = model
@@ -14,7 +15,9 @@ struct ModelsSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form { ModelPicker(models: app.models, selected: $selected) }
+            Form { ModelPicker(models: app.models, selected: $selected, query: query) }
+                .searchable(text: $query, prompt: "Search models")
+                .refreshable { await app.checkAvailability() }
                 .navigationTitle("Models in session")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

@@ -9,7 +9,8 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Label, OptionList, SelectionList, Static
+from textual import on
+from textual.widgets import Input, Label, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
@@ -71,38 +72,67 @@ class ApprovalScreen(ModalScreen[tuple[bool, str | None]]):
 
 
 class ModelsScreen(ModalScreen[list[int] | None]):
-    """Tick the models (from any endpoint) that take part in this session."""
+    """Tick the models (from any endpoint) that take part in this session.
+
+    Models the server can't use right now (no or rejected key, not offered) are greyed out and can't be ticked;
+    one already in the session can still be removed. Type to filter."""
 
     DEFAULT_CSS = MODAL_CSS.format(name="ModelsScreen") + "ModelsScreen SelectionList { height: auto; max-height: 30; }"
     BINDINGS = [Binding("enter", "save", "Save", priority=True), Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, models: list[dict], selected: list[int], runner_clis: set[str]) -> None:
+    def __init__(self, models: list[dict], selected: list[int], runner_clis: set[str], title: str = "Models in this session") -> None:
         super().__init__()
-        self.models = models
+        self.models = [m for m in models if m["enabled"] or m["id"] in selected]
         self.selected = selected
+        self.chosen = set(selected)
         self.runner_clis = runner_clis
+        self.title_text = title
 
-    def compose(self) -> ComposeResult:
+    def _selections(self, query: str = "") -> list[Selection]:
+        words = query.lower().split()
         items = []
-        for m in self.models:
-            if not m["enabled"]:
+        for m in sorted(self.models, key=lambda m: (not m["available"], m["endpoint_name"], m["display_name"].lower())):
+            if not all(w in f"{m['display_name']} {m['model_name']} {m['endpoint_name']}".lower() for w in words):
                 continue
+            usable = m["available"] or m["id"] in self.chosen
             label = Text()
-            label.append("● ", style=m["color"])
-            label.append(m["display_name"])
+            label.append("● ", style=m["color"] if m["available"] else "grey50")
+            label.append(m["display_name"], style="" if m["available"] else "grey50")
             label.append(f"  {m['endpoint_name']}", style="dim")
             if m["endpoint_kind"] == "agent_cli":
-                label.append("  agent CLI", style="magenta")
-            items.append(Selection(label, m["id"], m["id"] in self.selected))
+                label.append("  agent CLI", style="magenta" if m["available"] else "grey50")
+            if not m["available"]:
+                label.append(f"  unavailable: {m.get('availability_detail') or '?'}", style="grey50 italic")
+            items.append(Selection(label, m["id"], m["id"] in self.chosen, disabled=not usable))
+        return items
+
+    def compose(self) -> ComposeResult:
+        available = sum(1 for m in self.models if m["available"])
         with Vertical():
-            yield Label("Models in this session", classes="title")
-            yield SelectionList[int](*items)
-            yield Label("space toggle   enter save   esc cancel   (agent CLIs need a folder on a runner or SSH host)", classes="hint")
+            yield Label(f"{self.title_text}  ·  {available} of {len(self.models)} available", classes="title")
+            yield Input(placeholder="type to filter models…", id="model-filter")
+            yield SelectionList[int](*self._selections())
+            yield Label("space toggle   enter save   esc cancel   greyed out = unavailable now   "
+                        "(agent CLIs need a folder on a runner or SSH host)", classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one(SelectionList).focus()
+
+    @on(Input.Changed, "#model-filter")
+    def _filter(self, event: Input.Changed) -> None:
+        lst = self.query_one(SelectionList)
+        lst.clear_options()
+        lst.add_options(self._selections(event.value))
+
+    @on(SelectionList.SelectedChanged)
+    def _changed(self, event: SelectionList.SelectedChanged) -> None:
+        lst = event.selection_list
+        shown = {lst.get_option_at_index(i).value for i in range(lst.option_count)}
+        self.chosen = (self.chosen - shown) | set(lst.selected)
 
     def action_save(self) -> None:
-        chosen = list(self.query_one(SelectionList).selected)
         # keep the existing order for models that stay, append new ones
-        ordered = [m for m in self.selected if m in chosen] + [m for m in chosen if m not in self.selected]
+        ordered = [m for m in self.selected if m in self.chosen] + [m["id"] for m in self.models if m["id"] in self.chosen and m["id"] not in self.selected]
         self.dismiss(ordered)
 
     def action_cancel(self) -> None:
@@ -195,23 +225,29 @@ def stats_body(stats: dict[str, Any], compact: bool = False) -> Group:
 
 def endpoints_body(endpoints: list[dict], models: list[dict], settings: dict) -> Group:
     t = Table(title="Endpoints (configured on the server)", expand=True)
-    for col in ("Name", "Kind", "Base URL", "Key", "Source", "Models"):
+    for col in ("Name", "Kind", "Base URL", "Key", "Status", "Models"):
         t.add_column(col)
+    status_style = {"ok": "green", "error": "red", "no_key": "yellow"}
     for e in endpoints:
-        names = ", ".join(m["display_name"] for m in models if m["endpoint_id"] == e["id"])
+        mine = [m for m in models if m["endpoint_id"] == e["id"]]
+        usable = [m for m in mine if m["available"]]
+        names = ", ".join(m["display_name"] for m in usable[:8]) + (f" … +{len(usable) - 8}" if len(usable) > 8 else "")
         kind = e["kind"] + (f" ({e['driver']})" if e.get("driver") else "")
+        status = Text(e.get("status", "?"), style=status_style.get(e.get("status", ""), "dim"))
+        if e.get("status_detail"):
+            status.append("\n" + e["status_detail"][:120], style="dim")
         t.add_row(
             Text(e["name"], style="bold" if e["enabled"] else "dim strike"),
             kind,
             e.get("base_url") or "",
             e.get("api_key_masked") or "–",
-            e["source"],
-            names,
+            status,
+            Text(f"{len(usable)}/{len(mine)} available  ", style="dim") + Text(names),
         )
     prices = Table(title="Model prices (USD per 1M tokens)", expand=True)
     for col in ("Model", "Vendor id", "Input", "Output"):
         prices.add_column(col)
-    for m in models:
+    for m in [m for m in models if m["available"]][:60]:
         prices.add_row(Text(m["display_name"], style=m["color"]), m["model_name"], money(m["input_price"]), money(m["output_price"]))
     search = settings.get("web_search", {})
     footer = Text(f"web_search: {search.get('provider') or 'not configured'}   ·   edit config.yaml on the server, then POST /api/admin/reload-config", style="dim")

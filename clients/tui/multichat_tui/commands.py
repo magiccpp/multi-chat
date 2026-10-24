@@ -14,7 +14,8 @@ class Command:
 
 
 COMMANDS = [
-    Command("new", "/new [title]", "Start a new session with the current models"),
+    Command("new", "/new [title]", "Start a new session with the current models (ignored while this one is empty)"),
+    Command("attach", "/attach <file>…|clear", "Attach documents or images to your next message"),
     Command("sessions", "/sessions", "Open another session"),
     Command("models", "/models", "Choose which models join this session"),
     Command("plan", "/plan", "Switch to PLAN: ask several models, compare answers"),
@@ -29,7 +30,7 @@ COMMANDS = [
     Command("revert", "/revert", "Undo the file changes of the last turn"),
     Command("stop", "/stop", "Stop the running turn"),
     Command("stats", "/stats", "Price and performance per model"),
-    Command("endpoints", "/endpoints", "Endpoints and models configured on the server"),
+    Command("endpoints", "/endpoints [check]", "Endpoints, key status and models on the server (check = re-check now)"),
     Command("rename", "/rename <title>", "Rename this session"),
     Command("help", "/help", "Keys and commands"),
     Command("quit", "/quit", "Exit"),

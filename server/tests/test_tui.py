@@ -116,3 +116,73 @@ async def test_tui_plan_vote_build(server, client, tmp_path):
     assert row[second.model_id]["upvotes"] >= 1 and row[second.model_id]["builder_picks"] >= 1
     assert row[third.model_id]["downvotes"] >= 1
     await asyncio.sleep(0)
+
+
+async def test_tui_models_new_session_and_attach(server, client, tmp_path):
+    from PIL import Image
+    from textual.widgets import Input, SelectionList
+
+    from multichat_tui import cli
+    from multichat_tui.screens import ModelsScreen
+
+    ep = (await client.post("/api/endpoints", json={"name": "tui-nokey", "kind": "openai_compatible",
+                                                    "base_url": "https://api.example.com/v1"})).json()
+    gone = (await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": "needs-key", "display_name": "Needs key"})).json()
+    await client.post(f"/api/endpoints/{ep['id']}/check")
+    models = await models_by_name(client)
+    s = (await client.post("/api/sessions", json={"title": "Attach", "model_ids": [models["mock-alpha"]["id"]]})).json()
+    doc = tmp_path / "spec.md"
+    doc.write_text("# Spec\nTokens last 15 minutes.\n")
+    png = tmp_path / "screen.png"
+    Image.new("RGB", (64, 48), "red").save(png)
+
+    api = MultiChatClient(server, TOKEN)
+    app = MultiChatApp(api, ClientConfig(url=server, token=TOKEN), session_id=s["id"], start_runner=False)
+    async with app.run_test(size=(150, 46)) as pilot:
+        await until(pilot, lambda: app.st.session_id == s["id"])
+
+        # unavailable models are greyed out (disabled) in /models; typing filters the list
+        await send(pilot, app, "/models")
+        await until(pilot, lambda: isinstance(app.screen, ModelsScreen))
+        lst = app.screen.query_one(SelectionList)
+        options = {lst.get_option_at_index(i).value: lst.get_option_at_index(i) for i in range(lst.option_count)}
+        assert options[gone["id"]].disabled and not options[models["mock-beta"]["id"]].disabled
+        app.screen.query_one(Input).value = "beta"
+        await pilot.pause(0.1)
+        assert [lst.get_option_at_index(i).value for i in range(lst.option_count)] == [models["mock-beta"]["id"]]
+        await pilot.press("escape")
+
+        # /new while the session is empty is ignored
+        await send(pilot, app, "/new")
+        await pilot.pause(0.2)
+        assert app.st.session_id == s["id"]
+
+        # /attach a document and an image, then send
+        await send(pilot, app, f"/attach {doc} {png}")
+        assert [p.name for p in app.pending_files] == ["spec.md", "screen.png"]
+        await send(pilot, app, "What do these show?")
+        await until(pilot, lambda: not app.st.busy and any(m.role == "assistant" and m.status == "complete" for m in app.st.messages.values()))
+        assert not app.pending_files
+        user = next(m for m in app.st.ordered() if m.role == "user")
+        assert [a["filename"] for a in user.attachments] == ["spec.md", "screen.png"]
+        reply = next(m for m in app.st.ordered() if m.role == "assistant")
+        assert "(I see 1 image.)" in reply.content and "spec.md" in reply.content
+        await pilot.pause(0.2)
+        app.save_screenshot(str(SHOTS / "tui-attachments.svg"))
+
+        # with messages in it, /new creates a session; a second /new right away is ignored
+        await send(pilot, app, "/new")
+        await until(pilot, lambda: app.st.session_id != s["id"])
+        fresh = app.st.session_id
+        await send(pilot, app, "/new")
+        await pilot.pause(0.2)
+        assert app.st.session_id == fresh
+    await api.close()
+
+    # plain CLI: multichat run --attach
+    code = await asyncio.to_thread(cli.main, ["--url", server, "--token", TOKEN, "run", "Summarise the spec", "--models", "Alpha",
+                                              "--attach", str(doc), "--json"])
+    assert code == 0
+    latest = (await client.get("/api/sessions", params={"limit": 1})).json()[0]
+    msgs = (await client.get(f"/api/sessions/{latest['id']}/messages")).json()
+    assert msgs[0]["attachments"][0]["filename"] == "spec.md" and "spec.md" in msgs[1]["content"]
