@@ -48,6 +48,9 @@ def detect() -> dict[str, dict]:
 def approval_bridge_command() -> list[str]:
     """How Claude Code should start our approval MCP server (works from source and from the frozen .exe)."""
     if getattr(sys, "frozen", False):
+        bridge = Path(sys.executable).with_name("multichat-approval-bridge.exe")
+        if bridge.exists():
+            return [str(bridge)]
         return [sys.executable, "--approval-mcp"]
     return [sys.executable, "-m", "multichat_client.runner.approval_mcp"]
 
@@ -92,6 +95,9 @@ async def run(
         names = " or ".join(EXECUTABLES.get(driver, [driver]))
         raise FileNotFoundError(f"{names} is not installed on this machine (or not on PATH)")
     mcp_path = None
+    prompt_file = None
+    if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
+        args, prompt_file = _args_for_cmd_wrapper(args, cwd)
     argv = [exe, *args]
     if approval and driver == "claude_code":
         mcp_path = write_mcp_config(server_url, token, approval["session_id"], approval["model_id"])
@@ -119,3 +125,21 @@ async def run(
     finally:
         if mcp_path:
             os.unlink(mcp_path)
+        if prompt_file:
+            prompt_file.unlink(missing_ok=True)
+
+
+def _args_for_cmd_wrapper(args: list[str], cwd: Path) -> tuple[list[str], Path | None]:
+    """cmd.exe cannot pass multi-line or quote-heavy arguments to .cmd shims (npm installs); move the prompt to a file."""
+    out, prompt_file = [], None
+    for arg in args:
+        if prompt_file is None and (len(arg) > 200 or any(ch in arg for ch in '\n"^&|<>%')):
+            folder = cwd / ".multichat"
+            folder.mkdir(exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix="prompt-", suffix=".md", dir=folder)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(arg)
+            prompt_file = Path(name)
+            arg = f"Your task is in the file .multichat/{prompt_file.name} - read it first and follow it."
+        out.append(arg)
+    return out, prompt_file

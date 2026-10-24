@@ -124,3 +124,12 @@ def test_session_state_reducer():
     assert st.usage[7].cost == 0.01 and not st.busy
     assert [m.id for m in st.ordered(7)] == [1, 2]
     assert st.by_seq(2).id == 2 and st.latest_reply(7).id == 2
+
+
+def test_cmd_wrapper_moves_prompt_to_file(tmp_path):
+    from multichat_client.runner.cli_agents import _args_for_cmd_wrapper
+
+    args, f = _args_for_cmd_wrapper(["-p", 'Fix "auth"\nthen test', "--force"], tmp_path)
+    assert args[0] == "-p" and args[2] == "--force" and ".multichat/" in args[1]
+    assert f.read_text(encoding="utf-8") == 'Fix "auth"\nthen test'
+    assert _args_for_cmd_wrapper(["-p", "short"], tmp_path) == (["-p", "short"], None)

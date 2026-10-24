@@ -1,0 +1,148 @@
+# MultiChat
+
+A self-hosted code agent that talks to several LLMs at once. You **plan** with multiple models, compare and vote on their answers, then switch to **build** with the model that understood the problem best. The builder edits files, runs commands, downloads and installs things on your own PC or an SSH host, with your approval.
+
+- **Several models in one session**: any OpenAI-compatible endpoint (OpenAI, OpenRouter, DeepSeek, Gemini, xAI, Groq, Mistral, GitHub Models, Ollama…), Anthropic, plus **Claude Code**, **Cursor** and **GitHub Copilot** as agent participants. Models can join or leave mid-session.
+- **Shared or isolated**: models either see each other's replies (and build on or challenge them) or answer independently.
+- **PLAN → BUILD**: ★ pick a builder. It gets the plan discussion, with your votes marked, and works through tools.
+- **Votes and statistics**: ▲/▼ on any reply from the desktop app, the TUI or the plain CLI. A statistics view shows cost, tokens, latency, time-to-first-token, tokens/s, approval rate, win rate (how often a model was picked as builder) and cost per upvote.
+- **Token meter**: per-model tokens and $ for the current session, live. Values estimated when a vendor doesn't report usage are marked with `~`.
+- **Where work happens**: on **your PC** through a runner built into the clients (PowerShell on Windows, bash on Linux), on **SSH hosts**, or **no folder** at all (chat only; attach one later). Approvals per session, per-turn diffs and **Revert**.
+- **Clients**: a **Windows desktop app** (PySide6, IDE layout) and a **Linux terminal UI** (Textual, opencode-style). Both connect to one **containerized server** (FastAPI + PostgreSQL) that holds all configuration and keys.
+
+```
+ Windows desktop app ─┐                       ┌─ OpenAI / Anthropic / OpenRouter / DeepSeek / …
+   (built-in runner)  │   HTTPS + SSE / WSS   │
+ Linux TUI / CLI ─────┼──▶  MultiChat server ──┼─ web_fetch / web_search
+   (built-in runner)  │   (FastAPI, Postgres) │
+ headless runners ────┘     config.yaml       └─ SSH hosts (asyncssh)
+                                │
+   runner ◀── file / command / agent-CLI requests (your PC: PowerShell or bash; Claude Code, Cursor, Copilot)
+```
+
+## 1. Run the server (Docker or nerdctl)
+
+```bash
+git clone https://github.com/magiccpp/multi-chat.git && cd multi-chat
+make init                       # creates .env (random token + DB password) and config.yaml
+$EDITOR .env config.yaml        # add vendor keys; choose endpoints and models
+make up                         # docker compose up -d --build
+make up COMPOSE="nerdctl compose"   # …or with nerdctl
+```
+
+Without `make`, run `cp .env.example .env`, `cp config.example.yaml config.yaml`, then `docker compose up -d` (or `nerdctl compose up -d`).
+The server listens on `SERVER_PORT` (default 8000). The token clients need is `MULTICHAT_API_TOKEN` in `.env`. If clients connect from other machines, put a TLS reverse proxy (Caddy, nginx, Traefik) in front, because runners connect over `wss://`.
+
+Alternatively, `install.sh --server` (below) clones the repo, generates the secrets and starts the stack for you.
+
+### Configuration lives on the server
+
+`config.yaml` (see [`config.example.yaml`](config.example.yaml)) declares:
+
+| Section | What |
+| --- | --- |
+| `endpoints` | `kind: openai_compatible \| anthropic \| agent_cli \| mock`, `base_url`, `api_key: ${ENV_VAR}`, and `models` with `display_name`, `color`, `input_price` / `output_price` (USD per 1M tokens) |
+| `ssh_connections` | hosts the agents may work on (`auth: key \| password \| agent`, `shell: bash \| powershell`) |
+| `web_search` | `provider: brave \| tavily \| searxng` and key, used by the `web_search` tool (`web_fetch` needs no key) |
+| `web.allow_private` | let `web_fetch` reach LAN addresses (off by default; SSRF guard) |
+| `defaults` | approval defaults for new sessions, tool-loop step cap, command timeout |
+
+Keys come from `.env` via `${NAME}`. They're stored encrypted in Postgres (`MULTICHAT_SECRET_KEY`, or a key generated into the `appdata` volume) and never sent to clients; the API only ever returns masked keys. Rows from `config.yaml` are read-only in the clients. To apply edits without a restart, call `POST /api/admin/reload-config` or restart. The desktop app's **Endpoints** dialog can also add endpoints and models (with "Import from vendor", which pulls prices from OpenRouter).
+
+### Claude Code, Cursor and GitHub Copilot
+
+These join a session like any model, but they run their own agent loop on the machine that holds the folder: your PC (runner) or an SSH host. The CLI must be installed there.
+
+| | Command used | Credentials | PLAN | BUILD |
+| --- | --- | --- | --- | --- |
+| Claude Code | `claude -p --output-format stream-json` (`--resume` keeps its context) | `ANTHROPIC_API_KEY` from the endpoint (`--bare` mode) | `--permission-mode plan` | approvals go through a bridge into MultiChat's Approve/Reject (runner only) |
+| Cursor | `cursor-agent -p --output-format stream-json` | `CURSOR_API_KEY` from your Cursor dashboard | proposes only | `--force` (auto-applies; use Revert) |
+| GitHub Copilot | `copilot -p … -s` | `GH_TOKEN`, or `copilot login` on that machine | write and shell tools denied | `--allow-all-tools` (auto-applies; use Revert) |
+
+Anthropic does not allow third-party apps to offer claude.ai (subscription) login, so MultiChat has no "Sign in with Claude". Use an API key for the Claude Code endpoint (or leave it empty and the CLI uses whatever sign-in that machine already has). For GitHub's API models, use the **GitHub Models** preset (`https://models.github.ai/inference`, a token with `models:read`).
+
+Cursor's and Copilot's output formats are parsed tolerantly, and Copilot token counts are estimated (`~`).
+
+## 2. Linux: terminal UI and CLI
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/magiccpp/multi-chat/main/install.sh | bash
+```
+
+This installs into `~/.local/share/multichat/venv`, links `~/.local/bin/multichat` and asks for the server URL and token (saved to `~/.config/multichat/client.toml`, mode 600). Options: `--ref <branch|tag>`, `--upgrade`, `--uninstall`, `--no-config`, `--runner-service` (systemd user service for a headless runner) and `--server [dir]` (also deploy the server with docker/nerdctl compose). For non-interactive installs, set `MULTICHAT_URL` and `MULTICHAT_TOKEN`.
+
+```
+multichat                         open the TUI (latest session); its runner shares the current folder
+multichat --root ~/src --root ~/work     folders the runner may use
+multichat run "Why is login slow?" --models gpt-5,claude --mode shared [--json]
+multichat vote 1234 up            # or: multichat vote '#12' down --session 7
+multichat history | stats | sessions | models
+multichat runner --root ~/src     # headless runner only
+multichat login                   # change server/token
+```
+
+**TUI keys**: `enter` sends (`alt+enter` / `ctrl+j` for a new line) · `tab` / `shift+tab` switch between All and per-model tabs · `alt+↑` focuses replies, then `↑`/`↓` move · `+` `-` `0` vote · `b` pick as builder · `enter` expand tool output · `y` copy · `1..9` quick-vote after a PLAN turn · `ctrl+b` sidebar · `ctrl+p` command palette · `ctrl+a` pending approval.
+
+**Slash commands**: `/new`, `/sessions`, `/models`, `/plan`, `/build [model]`, `/builder <model>`, `/mode shared|isolated`, `/to <models|all>`, `/folder none|here|<path>|ssh:<conn>:<path>|runner:<name>:<path>`, `/approve edits|cmds auto|ask`, `/vote <#n|up|down> [up|down|clear]`, `/quickvote on|off`, `/revert`, `/stop`, `/stats`, `/endpoints`, `/rename`, `/help`.
+
+## 3. Windows: desktop app
+
+Build `MultiChat.exe` on a Windows machine with Python 3.12:
+
+```powershell
+git clone https://github.com/magiccpp/multi-chat.git; cd multi-chat
+powershell -ExecutionPolicy Bypass -File clients\desktop\build_exe.ps1
+clients\desktop\dist\MultiChat\MultiChat.exe
+```
+
+Or run from source: `pip install clients\core clients\desktop` then `multichat-desktop` (or `python -m multichat_desktop`).
+
+On first start, enter the server URL and token; the token is kept in Windows Credential Manager. Then:
+
+- **Runner** (left bar): tick *Let MultiChat run tasks on this PC* and add the folders models may use. Commands run in PowerShell with your normal rights. Installs that need admin rights fail rather than elevate. You can also ask to confirm every command locally. Closing the window keeps the runner in the tray.
+- **Models (N)**: tick models from any endpoint to join the session.
+- **Folder button**: choose *No folder*, *This PC*, *Another runner* or an *SSH host*. For a new SSH host, you confirm its key fingerprint once, then browse to a folder.
+- **PLAN | BUILD**, **Builder**, **Shared/Isolated**, **Edits/Commands approval** sit in the toolbar. The chat panel has a tab per model, ▲/▼ and **★ Pick as builder** on every reply, and recipient chips. Edits awaiting approval open as a diff with **Accept / Reject**; applied changes open as diffs with **Revert this turn**.
+- **Stats** (left bar): KPI tiles, a sortable per-model table, and cost, win-rate and cost-per-day charts.
+- The status bar shows per-model tokens and $ for the session, plus the runner state.
+
+## How a session works
+
+1. **PLAN**: your message goes to the ticked models. *Isolated* runs them in parallel, each seeing only its own thread. *Shared* runs them one after another, each seeing earlier replies as `[Model said]: …`. With a folder attached, models get read-only tools (`list_dir`, `read_file`, `grep`) plus `web_fetch` / `web_search`.
+2. **Vote** ▲/▼ on replies. Votes feed the statistics and the builder's hand-off.
+3. **★ Pick as builder**: the session switches to BUILD. The builder's system prompt contains the plan discussion, with upvoted ideas marked, and the target OS and shell. It gets `write_file`, `edit_file` and `run_command`, and is told to use non-interactive flags (`winget … --silent --accept-package-agreements`, `apt-get -y`).
+4. **Approvals**: with `ask`, each edit or command waits for Approve/Reject in any connected client. A rejection, with your note, goes back to the model.
+5. **Revert**: every write is journaled per turn. For agent CLIs, the folder is snapshotted with git trees or copies. **Revert** restores the turn.
+
+## Security notes
+
+- Every API route and the runner WebSocket require `Authorization: Bearer $MULTICHAT_API_TOKEN`. Treat the token like a password: it lets its holder run commands on connected runners within their allowed folders.
+- Runners only touch the folders you allowed (symlink escapes are blocked) and run with your user's rights. Command approval defaults to `ask`.
+- SSH host keys are pinned on first use after you confirm the fingerprint. A changed key refuses to connect.
+- `web_fetch` blocks private and loopback addresses unless `web.allow_private` is set.
+
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e "server[test]" -e clients/core -e clients/tui -e clients/desktop pytest-asyncio
+# Postgres for tests: docker compose -f compose.test.yaml run --rm tests   (or a local one:)
+export DATABASE_URL=postgresql+asyncpg://multichat:multichat@localhost:5432/multichat_test
+cd server && pytest            # API, providers, shared/isolated context, runner, SSH, agent CLIs, TUI pilot
+cd ../clients/core && pytest   # runner units (snapshots, confinement, PowerShell argv, MCP bridge)
+cd ../desktop && QT_QPA_PLATFORM=offscreen pytest -p no:asyncio   # desktop app end-to-end
+```
+
+The `mock` endpoint kind gives deterministic offline models. A user line `@tool <name> {json}` makes a mock model call that tool, which is handy for trying approvals and diffs without API keys.
+
+```
+server/            FastAPI app, Alembic migrations, Dockerfile
+  app/providers/   OpenAI-compatible, Anthropic, mock, agent_cli (claude_code, cursor, copilot)
+  app/agent/       context (shared/isolated), tools, approvals, turn loop, event bus
+  app/workspaces/  runner / SSH / none, git snapshots
+  app/runners/     runner hub (WebSocket RPC)
+clients/core/      multichat_client: API client, session state, runner, approval MCP bridge
+clients/tui/       multichat_tui: Textual TUI + `multichat` CLI
+clients/desktop/   multichat_desktop: PySide6 app, PyInstaller spec, build_exe.ps1
+install.sh  compose.yaml  compose.test.yaml  config.example.yaml  .env.example  Makefile
+```

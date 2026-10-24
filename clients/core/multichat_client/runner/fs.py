@@ -9,7 +9,7 @@ from pathlib import Path
 
 MAX_READ = 2_000_000
 MAX_GREP_FILE = 1_000_000
-SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", "dist", "build", ".tox", ".idea"}
+SKIP_DIRS = {".git", ".multichat", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", "dist", "build", ".tox", ".idea"}
 
 
 class FsError(Exception):
