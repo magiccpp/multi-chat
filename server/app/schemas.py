@@ -194,6 +194,8 @@ class SessionOut(ORM):
     updated_at: datetime
     participants: list[ParticipantOut] = Field(default_factory=list)
     busy: bool = False
+    cost: float = 0.0  # USD spent in this session, all models
+    tokens: int = 0
 
 
 class SessionModelsIn(BaseModel):
@@ -216,6 +218,7 @@ class MessageOut(ORM):
     status: str
     created_at: datetime
     vote: int = 0
+    usage: dict[str, Any] | None = None  # {input_tokens, output_tokens, cost, estimated} for this reply
 
 
 class ChatIn(BaseModel):

@@ -33,6 +33,16 @@ from multichat_desktop.theme import colors
 BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
+def money(v: float) -> str:
+    if not v:
+        return "$0"
+    return f"${v:.4f}" if v < 1 else f"${v:.2f}"
+
+
+def tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
 def args_summary(arguments: dict[str, Any]) -> str:
     for key in ("command", "path", "file_path", "url", "query", "pattern"):
         if key in arguments:
@@ -125,6 +135,11 @@ class MessageCard(QFrame):
             title += f' <span style="color:{c["accent"]}">…</span>'
         elif m.status in ("error", "cancelled"):
             title += f' <span style="color:{c["delfg"]}">[{m.status}]</span>'
+        if is_reply and m.usage:
+            u = m.usage
+            approx = "~" if u.get("estimated") else ""
+            title += (f' &nbsp;<span style="color:{c["muted"]}" title="{u["input_tokens"]} in / {u["output_tokens"]} out">'
+                      f'{approx}{tokens(u["input_tokens"] + u["output_tokens"])} tok · {money(u["cost"])}</span>')
         self.title.setText(title)
 
         for w in (self.up, self.down, self.copy):
@@ -163,6 +178,51 @@ class MessageCard(QFrame):
                 elif self.expanded and len(lines) > 6:
                     rows.append('<a href="less" style="margin-left:16px">show less</a>')
         return "".join(rows)
+
+
+class CostBar(QFrame):
+    """What this session has cost so far, per model and in total. Click a model to open its tab."""
+
+    model_clicked = Signal(object)
+
+    def __init__(self, ctl: Controller) -> None:
+        super().__init__()
+        self.ctl = ctl
+        self.setObjectName("costbar")
+        self.row = QHBoxLayout(self)
+        self.row.setContentsMargins(8, 4, 8, 4)
+        self.row.setSpacing(6)
+        self.refresh()
+
+    def refresh(self) -> None:
+        while self.row.count():
+            item = self.row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        st, c = self.ctl.st, colors()
+        title = QLabel("<b>Session cost</b>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        self.row.addWidget(title)
+        ids = [p["model_id"] for p in st.participants]
+        ids += [mid for mid in st.usage if mid is not None and mid not in ids]  # models that left keep their cost
+        for mid in sorted(ids, key=lambda m: -(st.usage[m].cost if m in st.usage else 0)):
+            u = st.usage.get(mid)
+            chip = QToolButton()
+            chip.setObjectName("costchip")
+            spent = money(u.cost) if u else "$0"
+            tok = f" · {'~' if u and u.estimated else ''}{tokens(u.input_tokens + u.output_tokens)} tok" if u else ""
+            chip.setText(f"● {st.name(mid)}  {spent}{tok}")
+            chip.setStyleSheet(f"QToolButton#costchip {{ color: {st.color(mid)}; }}")
+            if u:
+                chip.setToolTip(f"{st.name(mid)}: {u.input_tokens} input + {u.output_tokens} output tokens, {money(u.cost)}"
+                                + (" (estimated)" if u.estimated else ""))
+            chip.clicked.connect(lambda _=False, mid=mid: self.model_clicked.emit(mid))
+            self.row.addWidget(chip)
+        self.row.addStretch(1)
+        total = QLabel(f"<b>Σ {money(st.total_cost())}</b>")
+        total.setTextFormat(Qt.TextFormat.RichText)
+        total.setToolTip("Total for this session, all models")
+        self.row.addWidget(total)
 
 
 class ApprovalCard(QFrame):
@@ -248,6 +308,9 @@ class ChatPanel(QWidget):
         self.tabs.setExpanding(False)
         self.tabs.currentChanged.connect(self._tab_changed)
         layout.addWidget(self.tabs)
+        self.cost_bar = CostBar(ctl)
+        self.cost_bar.model_clicked.connect(self.show_model_tab)
+        layout.addWidget(self.cost_bar)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -320,22 +383,41 @@ class ChatPanel(QWidget):
         self.update_controls()
         QTimer.singleShot(50, self._scroll_end)
 
+    def _tab_label(self, model_id: int | None) -> str:
+        st = self.ctl.st
+        if model_id is None:
+            return f"All  {money(st.total_cost())}" if st.usage else "All"
+        u = st.usage.get(model_id)
+        return f"{st.name(model_id)}  {money(u.cost)}" if u else st.name(model_id)
+
+    def update_costs(self) -> None:
+        for i in range(self.tabs.count()):
+            self.tabs.setTabText(i, self._tab_label(self.tabs.tabData(i)))
+        self.cost_bar.refresh()
+
+    def show_model_tab(self, model_id: int) -> None:
+        for i in range(self.tabs.count()):
+            if self.tabs.tabData(i) == model_id:
+                self.tabs.setCurrentIndex(i)
+
     def rebuild_tabs(self) -> None:
         wanted = [("All", None)] + [(p["display_name"], p["model_id"]) for p in self.ctl.st.participants]
-        current = [(self.tabs.tabText(i), self.tabs.tabData(i)) for i in range(self.tabs.count())]
-        if current == wanted:
+        current = [self.tabs.tabData(i) for i in range(self.tabs.count())]
+        if current == [mid for _, mid in wanted]:
+            self.update_costs()
             return
         self.tabs.blockSignals(True)
         while self.tabs.count():
             self.tabs.removeTab(0)
-        for i, (label, mid) in enumerate(wanted):
-            self.tabs.addTab(label)
+        for i, (_label, mid) in enumerate(wanted):
+            self.tabs.addTab(self._tab_label(mid))
             self.tabs.setTabData(i, mid)
             if mid:
                 self.tabs.setTabTextColor(i, self.ctl.st.color(mid))
         self.tabs.blockSignals(False)
         self.tab_model = None
         self.tabs.setCurrentIndex(0)
+        self.cost_bar.refresh()
 
     def rebuild_chips(self) -> None:
         while self.chips_row.count():
@@ -469,6 +551,10 @@ class ChatPanel(QWidget):
                 self.dirty.add(owner)
         elif etype == "vote":
             self.dirty.add(ev["message_id"])
+        elif etype == "usage":
+            if ev.get("message_id") in self.cards:
+                self.dirty.add(ev["message_id"])
+            self.update_costs()
         elif etype == "approval_required":
             card = ApprovalCard(self.ctl, ev)
             self.approval_cards[ev["call_id"]] = card

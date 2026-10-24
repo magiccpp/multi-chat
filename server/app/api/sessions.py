@@ -51,6 +51,11 @@ async def session_out(db: AsyncSession, s: Session) -> SessionOut:
     ]
     out.workspace_label = await workspace_label(db, s)
     out.busy = turns.busy(s.id)
+    cost, tokens = (await db.execute(
+        select(func.coalesce(func.sum(Usage.cost), 0), func.coalesce(func.sum(Usage.input_tokens + Usage.output_tokens), 0))
+        .where(Usage.session_id == s.id)
+    )).one()
+    out.cost, out.tokens = float(cost), int(tokens)
     return out
 
 
@@ -203,10 +208,20 @@ async def list_messages(session_id: int, db: AsyncSession = Depends(get_db)) -> 
         .where(Message.session_id == session_id)
         .order_by(Message.id)
     )
+    usage = {
+        mid: {"input_tokens": int(i or 0), "output_tokens": int(o or 0), "cost": float(c or 0), "estimated": bool(e)}
+        for mid, i, o, c, e in (await db.execute(
+            select(Usage.message_id, func.sum(Usage.input_tokens), func.sum(Usage.output_tokens), func.sum(Usage.cost),
+                   func.bool_or(Usage.estimated))
+            .where(Usage.session_id == session_id)
+            .group_by(Usage.message_id)
+        )).all()
+    }
     out = []
     for m, vote in rows.all():
         item = MessageOut.model_validate(m)
         item.vote = vote or 0
+        item.usage = usage.get(m.id)
         out.append(item)
     return out
 

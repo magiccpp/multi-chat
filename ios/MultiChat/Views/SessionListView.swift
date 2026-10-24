@@ -52,6 +52,9 @@ struct SessionRow: View {
             HStack {
                 Text(session.title).font(.headline).lineLimit(1)
                 Spacer()
+                if let cost = session.cost {
+                    Text(money(cost)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 PhaseBadge(build: session.isBuild)
             }
             HStack(spacing: 6) {

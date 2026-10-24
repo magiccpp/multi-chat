@@ -29,7 +29,7 @@ from multichat_client import config as cfgmod
 from multichat_client.client import ApiError, MultiChatClient
 from multichat_client.state import MessageView, SessionState
 from multichat_tui.commands import match_model
-from multichat_tui.render import message_body, message_header, stats_table, usage_text
+from multichat_tui.render import message_body, message_header, money, stats_table, usage_text
 
 console = Console()
 VOTES = {"up": 1, "+1": 1, "down": -1, "-1": -1, "clear": 0, "0": 0}
@@ -197,7 +197,7 @@ async def cmd_sessions(args: argparse.Namespace) -> int:
     async with _client(args) as c:
         for s in await c.sessions():
             names = ", ".join(p["display_name"] for p in s["participants"])
-            console.print(f"[bold]{s['id']:>4}[/]  {s['title']}  [dim]{s['phase'].upper()} · {s['context_mode']} · "
+            console.print(f"[bold]{s['id']:>4}[/]  {s['title']}  [green]{money(s.get('cost') or 0)}[/]  [dim]{s['phase'].upper()} · {s['context_mode']} · "
                           f"{s['workspace_label']}[/]  [cyan]{names}[/]")
         return 0
 

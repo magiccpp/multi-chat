@@ -82,6 +82,7 @@ public struct SessionState: Sendable {
     mutating func add(_ m: Message) {
         var m = m
         if let old = messages[m.id], m.vote == 0 { m.vote = old.vote }
+        if let old = messages[m.id], m.usage == nil { m.usage = old.usage }
         messages[m.id] = m
         if m.role == "tool", let callId = m.toolCallId { results[callId] = m }
     }
@@ -118,6 +119,15 @@ public struct SessionState: Sendable {
             u.cost += event["cost"]?.double ?? 0
             u.estimated = u.estimated || (event["estimated"]?.bool ?? false)
             usage[key] = u
+            if let mid = event["message_id"]?.int, var m = messages[mid] {
+                var mu = m.usage ?? MessageUsage(inputTokens: 0, outputTokens: 0, cost: 0, estimated: false)
+                mu.inputTokens += event["input_tokens"]?.int ?? 0
+                mu.outputTokens += event["output_tokens"]?.int ?? 0
+                mu.cost += event["cost"]?.double ?? 0
+                mu.estimated = mu.estimated || (event["estimated"]?.bool ?? false)
+                m.usage = mu
+                messages[mid] = m
+            }
         case "approval_required":
             if let callId = event["call_id"]?.string {
                 approvals[callId] = Approval(

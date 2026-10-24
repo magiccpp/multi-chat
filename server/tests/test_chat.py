@@ -118,3 +118,23 @@ async def test_config_sync_recovers_from_changed_secret_key(client):
         await sync_config(db, load_config(get_settings().config_file))
     masked = next(e for e in (await client.get("/api/endpoints")).json() if e["name"] == "mock")["api_key_masked"]
     assert masked == "sk-…1234"
+
+
+async def test_session_and_message_costs(client):
+    models = await models_by_name(client)
+    ids = [models["mock-alpha"]["id"], models["mock-beta"]["id"]]
+    s = (await client.post("/api/sessions", json={"title": "costs", "model_ids": ids})).json()
+    assert s["cost"] == 0 and s["tokens"] == 0
+    await chat(client, s["id"], "Compare two approaches")
+    usage = (await client.get(f"/api/sessions/{s['id']}/usage")).json()
+    total = sum(u["cost"] for u in usage)
+    assert total > 0
+    session = (await client.get(f"/api/sessions/{s['id']}")).json()
+    assert abs(session["cost"] - total) < 1e-9 and session["tokens"] == sum(u["input_tokens"] + u["output_tokens"] for u in usage)
+    listed = next(x for x in (await client.get("/api/sessions")).json() if x["id"] == s["id"])
+    assert abs(listed["cost"] - total) < 1e-9
+    messages = (await client.get(f"/api/sessions/{s['id']}/messages")).json()
+    replies = [m for m in messages if m["role"] == "assistant"]
+    assert all(m["usage"] and m["usage"]["cost"] > 0 for m in replies)
+    assert abs(sum(m["usage"]["cost"] for m in replies) - total) < 1e-9
+    assert next(m for m in messages if m["role"] == "user")["usage"] is None

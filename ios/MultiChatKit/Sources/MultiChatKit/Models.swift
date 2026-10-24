@@ -105,8 +105,28 @@ public struct Session: Codable, Hashable, Identifiable, Sendable {
     public var updatedAt: String
     public var participants: [Participant]
     public var busy: Bool
+    /// USD spent in this session (all models) and its tokens; older servers don't send them.
+    public var cost: Double?
+    public var tokens: Int?
 
     public var isBuild: Bool { phase == "build" }
+}
+
+/// Tokens and cost of one reply.
+public struct MessageUsage: Codable, Hashable, Sendable {
+    public var inputTokens: Int
+    public var outputTokens: Int
+    public var cost: Double
+    public var estimated: Bool
+
+    public init(inputTokens: Int, outputTokens: Int, cost: Double, estimated: Bool) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cost = cost
+        self.estimated = estimated
+    }
+
+    public var tokens: Int { inputTokens + outputTokens }
 }
 
 public struct ToolCall: Codable, Hashable, Sendable {
@@ -130,9 +150,10 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var status: String
     public var vote: Int
     public var attachments: [AttachmentInfo]
+    public var usage: MessageUsage?
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote, attachments
+        case id, seq, turnId, role, modelId, phase, content, toolCalls, toolCallId, recipients, status, vote, attachments, usage
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,6 +171,7 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "complete"
         vote = try c.decodeIfPresent(Int.self, forKey: .vote) ?? 0
         attachments = try c.decodeIfPresent([AttachmentInfo].self, forKey: .attachments) ?? []
+        usage = try c.decodeIfPresent(MessageUsage.self, forKey: .usage)
     }
 
     public var isReply: Bool { role == "assistant" }

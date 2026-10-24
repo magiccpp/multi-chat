@@ -67,6 +67,10 @@ def message_header(st: SessionState, m: MessageView, *, focused: bool = False) -
         t.append("  …", style="yellow")
     elif m.status in ("error", "cancelled"):
         t.append(f"  [{m.status}]", style="red")
+    if m.role == "assistant" and m.usage:
+        u = m.usage
+        approx = "~" if u.get("estimated") else ""
+        t.append(f"  {approx}{tokens(u['input_tokens'] + u['output_tokens'])} tok · {money(u['cost'])}", style="dim")
     if focused:
         t.append("   + up  - down  0 clear  b builder  y copy  enter details", style="dim italic")
     return t

@@ -206,7 +206,10 @@ class MainWindow(QMainWindow):
         self.sessions.clear()
         for s in sessions:
             names = ", ".join(p["display_name"] for p in s["participants"])
-            item = QListWidgetItem(f"{s['title']}\n{s['phase'].upper()} · {s['context_mode']} · {names}")
+            cost = s.get("cost") or 0
+            spent = "$0" if not cost else (f"${cost:.4f}" if cost < 1 else f"${cost:.2f}")
+            item = QListWidgetItem(f"{s['title']}   {spent}\n{s['phase'].upper()} · {s['context_mode']} · {names}")
+            item.setToolTip(f"{s.get('tokens', 0)} tokens, {spent} in this session")
             item.setData(Qt.ItemDataRole.UserRole, s["id"])
             self.sessions.addItem(item)
 

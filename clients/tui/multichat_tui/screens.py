@@ -152,6 +152,7 @@ class SessionsScreen(ModalScreen[int | None]):
         for s in self.sessions:
             t = Text()
             t.append(f"{s['title']}", style="bold")
+            t.append(f"  {money(s.get('cost') or 0)}", style="green")
             t.append(f"  {s['phase'].upper()} · {s['context_mode']} · {s['workspace_label']}", style="dim")
             t.append("  " + ", ".join(p["display_name"] for p in s["participants"]), style="cyan")
             options.append(Option(t, id=str(s["id"])))

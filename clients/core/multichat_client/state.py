@@ -21,6 +21,7 @@ class MessageView:
     recipients: list[int] | None = None
     vote: int = 0
     attachments: list[dict[str, Any]] = field(default_factory=list)  # {id, filename, mime, size, kind}
+    usage: dict[str, Any] | None = None  # {input_tokens, output_tokens, cost, estimated} of this reply
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> MessageView:
@@ -38,6 +39,7 @@ class MessageView:
             recipients=d.get("recipients"),
             vote=d.get("vote", 0),
             attachments=d.get("attachments") or [],
+            usage=d.get("usage"),
         )
 
 
@@ -81,6 +83,8 @@ class SessionState:
         old = self.messages.get(view.id)
         if old is not None and not view.vote:
             view.vote = old.vote
+        if old is not None and view.usage is None:
+            view.usage = old.usage
         self.messages[view.id] = view
         if view.role == "tool" and view.tool_call_id:
             self.results[view.tool_call_id] = view
@@ -159,6 +163,15 @@ class SessionState:
             u.output_tokens += event["output_tokens"]
             u.cost += event["cost"]
             u.estimated = u.estimated or event["estimated"]
+            m = self.messages.get(event.get("message_id") or -1)
+            if m is not None:
+                mu = m.usage or {"input_tokens": 0, "output_tokens": 0, "cost": 0.0, "estimated": False}
+                m.usage = {
+                    "input_tokens": mu["input_tokens"] + event["input_tokens"],
+                    "output_tokens": mu["output_tokens"] + event["output_tokens"],
+                    "cost": mu["cost"] + event["cost"],
+                    "estimated": mu["estimated"] or event["estimated"],
+                }
         elif etype == "approval_required":
             self.approvals[event["call_id"]] = event
         elif etype == "approval_resolved":

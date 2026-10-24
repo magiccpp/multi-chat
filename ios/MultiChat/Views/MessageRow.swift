@@ -62,6 +62,10 @@ struct MessageRow: View {
                     Text("→ " + r.map { state.name($0) }.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if message.isReply, let u = message.usage {
+                Text("\(u.estimated ? "~" : "")\(tokenCount(u.tokens)) tok · \(money(u.cost))")
+                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
             if message.status == "streaming" { ProgressView().controlSize(.mini) }
             if message.status == "error" || message.status == "cancelled" {
                 Text(message.status).font(.caption).foregroundStyle(.red)

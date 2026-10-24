@@ -17,7 +17,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import qasync  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QToolButton  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 TOKEN = "desktop-test-token"
@@ -141,6 +141,15 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         await asyncio.sleep(0.3)
         replies = [m for m in ctl.st.ordered() if m.role == "assistant"]
         assert "I read 2 other answers" in replies[2].content
+        # session cost: per model in the cost bar and tabs, per reply on the cards, total in the cost bar
+        await until(lambda: all(ctl.st.messages[r.id].usage for r in replies))
+        await asyncio.sleep(0.2)
+        bar_text = " ".join(w.text() for w in win.chat.cost_bar.findChildren(QLabel) + win.chat.cost_bar.findChildren(QToolButton))
+        assert f"Σ ${ctl.st.total_cost():.4f}" in bar_text
+        for r in replies:
+            assert ctl.st.name(r.model_id) in bar_text
+            assert "tok · $" in win.chat.cards[r.id].title.text()
+        assert all("$" in win.chat.tabs.tabText(i) for i in range(win.chat.tabs.count()))
         win.grab().save(str(SHOTS / "desktop-plan.png"))
 
         # vote with the card buttons
@@ -289,6 +298,14 @@ def test_availability_new_session_and_attachments(server, tmp_path, monkeypatch)
         await until(lambda: user.attachments[0]["id"] in ctl.attachment_cache)
         await asyncio.sleep(0.3)
         win.grab().save(str(SHOTS / "desktop-attachments.png"))
+
+        # the sessions list shows what each session cost
+        win._left_page(1)
+        await until(lambda: win.sessions.count() > 0)
+        row = next(win.sessions.item(i).text() for i in range(win.sessions.count())
+                   if win.sessions.item(i).data(Qt.ItemDataRole.UserRole) == s["id"])
+        assert f"${ctl.st.total_cost():.4f}" in row
+        win._left_page(0)
 
         # now that the session has messages, New session creates one and asks for its models
         win.new_session()
