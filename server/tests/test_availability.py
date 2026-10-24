@@ -1,10 +1,12 @@
 """Endpoint checks: keys, vendor model lists, catalog import, and greying out unavailable models."""
 
 import asyncio
+import json
 
 import pytest
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from tests.conftest import free_port
 
@@ -17,6 +19,24 @@ async def models(authorization: str = Header(default="")) -> dict:
     if authorization != "Bearer right-key":
         raise HTTPException(401, {"error": {"message": "Incorrect API key provided"}})
     return {"object": "list", "data": [{"id": m, "object": "model", "created": 0, "owned_by": "x"} for m in CATALOG]}
+
+
+CHAT_REQUESTS: list[dict] = []
+
+
+@vendor.post("/v1/chat/completions")
+async def chat_completions(body: dict) -> StreamingResponse:
+    """Answers "ok" as a stream and remembers the request (to see which tools a model was offered)."""
+    CHAT_REQUESTS.append(body)
+
+    def chunks():
+        base = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": body["model"]}
+        yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'ok'}, 'finish_reason': None}]})}\n\n"
+        yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+        yield f"data: {json.dumps({**base, 'choices': [], 'usage': {'prompt_tokens': 10, 'completion_tokens': 1, 'total_tokens': 11}})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(chunks(), media_type="text/event-stream")
 
 
 @pytest.fixture(scope="module")
@@ -232,3 +252,25 @@ async def test_vendor_without_capabilities_keeps_tools(client, vendor_url, monke
         await db.commit()
     await client.post(f"/api/endpoints/{ep['id']}/check")
     assert (await models_of(client, ep["id"]))["vision-model"]["supports_tools"]
+
+
+async def test_imported_vendor_model_is_offered_tools_in_a_turn(client, vendor_url, monkeypatch):
+    """End to end: a model imported from a vendor that reports no capabilities (DeepSeek direct) gets tools in its
+    chat request, so it can use web_fetch (and run_command when a folder is attached)."""
+    from app import pricing
+    from tests.conftest import chat
+
+    async def no_caps():
+        return {}
+
+    monkeypatch.setattr(pricing, "openrouter_capabilities", no_caps)
+    monkeypatch.setattr(pricing, "VENDORS", [("127.0.0.1", "deepseek/")])
+    ep = (await client.post("/api/endpoints", json={"name": "vendor-deepseek-chat", "kind": "openai_compatible",
+                                                    "base_url": vendor_url, "api_key": "right-key"})).json()
+    await client.post(f"/api/endpoints/{ep['id']}/check")
+    model = (await models_of(client, ep["id"]))["good-model"]
+    s = (await client.post("/api/sessions", json={"title": "tools", "model_ids": [model["id"]]})).json()
+    CHAT_REQUESTS.clear()
+    await chat(client, s["id"], "check the server")
+    names = [t["function"]["name"] for t in CHAT_REQUESTS[-1].get("tools") or []]
+    assert "web_fetch" in names, CHAT_REQUESTS[-1].keys()

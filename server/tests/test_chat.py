@@ -252,3 +252,12 @@ async def test_context_report_and_manual_compact(client):
     assert roles[-1] == "summary"
     reply = finished(await chat(client, s["id"], "three"))[0]
     assert "(working from a summary)" in reply["content"]
+
+
+async def test_model_without_tools_gets_a_notice(client):
+    ep = next(e for e in (await client.get("/api/endpoints")).json() if e["name"] == "mock")
+    m = (await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": "mock-notools",
+                                                "display_name": "No Tools", "supports_tools": False})).json()
+    s = (await client.post("/api/sessions", json={"title": "notools", "model_ids": [m["id"]]})).json()
+    events = await chat(client, s["id"], "ssh to the server")
+    assert any(e["type"] == "notice" and "without tool calling" in e["message"] for e in events)

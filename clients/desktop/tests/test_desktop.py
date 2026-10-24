@@ -466,3 +466,29 @@ def test_availability_new_session_and_attachments(server, tmp_path, monkeypatch)
         await ctl.shutdown()
 
     run_async(scenario())
+
+
+def test_show_more_lines_link_works():
+    """The tool-output label must let the mouse activate its "show N more lines" / "show less" links."""
+    from PySide6.QtCore import Qt
+
+    from multichat_client.state import SessionState
+    from multichat_desktop.chat import MessageCard
+
+    QApplication.instance() or QApplication([])
+
+    class Ctl:
+        st = SessionState()
+
+    Ctl.st.load({"id": 1, "participants": [{"model_id": 2}]}, [
+        {"id": 5, "seq": 1, "role": "assistant", "model_id": 2, "content": "ran it",
+         "tool_calls": [{"id": "t1", "name": "run_command", "arguments": {"command": "ls"}}]},
+        {"id": 6, "seq": 2, "role": "tool", "model_id": 2, "content": "\n".join(f"line {i}" for i in range(20)), "tool_call_id": "t1"},
+    ], [], [{"id": 2, "display_name": "A", "color": "#f00"}])
+    card = MessageCard(Ctl, 5)
+    assert card.tools.textInteractionFlags() & Qt.TextInteractionFlag.LinksAccessibleByMouse
+    assert "show 14 more lines" in card.tools.text() and "line 19" not in card.tools.text()
+    card.tools.linkActivated.emit("more")
+    assert "line 19" in card.tools.text() and "show less" in card.tools.text()
+    card.tools.linkActivated.emit("less")
+    assert "line 19" not in card.tools.text()

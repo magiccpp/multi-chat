@@ -95,7 +95,9 @@ class MessageCard(QFrame):
         self.tools = QLabel()
         self.tools.setTextFormat(Qt.TextFormat.RichText)
         self.tools.setWordWrap(True)
-        self.tools.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # links too: "show N more lines" / "show less" only work when the label lets the mouse activate them
+        self.tools.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                           | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self.tools.linkActivated.connect(self._toggle)
         layout.addWidget(self.tools)
         self.refresh()

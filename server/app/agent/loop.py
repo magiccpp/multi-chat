@@ -398,6 +398,11 @@ class TurnManager:
             web_search_cfg = await get_setting(db, "web_search")
 
         project_memory = await memory.project_files(workspace)  # CLAUDE.md / AGENTS.md / MULTICHAT.md, once per turn
+        if not model.supports_tools:  # say so, rather than leave the model to claim it "has no shell"
+            bus.publish(session_id, {"type": "notice", "model_id": model.id, "message": (
+                f"{model.display_name} is set up without tool calling, so it can't read files, run commands or fetch "
+                "pages here; it answers from the conversation only. Endpoints → Check availability re-reads its "
+                "capabilities.")})
 
         async def record_change(path: str, before: str | None, after: str | None) -> None:
             async with dbmod.sessionmaker()() as db:
