@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -11,6 +13,8 @@ from multichat_client.client import ApiError, MultiChatClient
 from multichat_client.runner.agent import Runner
 from multichat_client.state import SessionState
 from multichat_desktop.asyncutil import spawn
+
+log = logging.getLogger("multichat.desktop")
 
 
 class Controller(QObject):
@@ -26,7 +30,8 @@ class Controller(QObject):
         self.st = SessionState()
         self.models: list[dict] = []
         self.runner: Runner | None = None
-        self.runner_task: asyncio.Task | None = None
+        self.runner_loop: asyncio.AbstractEventLoop | None = None
+        self.runner_thread: threading.Thread | None = None
         self.runner_state = "off"
         self._events_task: asyncio.Task | None = None
         self.recipients: list[int] | None = None
@@ -134,29 +139,58 @@ class Controller(QObject):
         self.call(self.client.revert(self.st.session_id, turn_id), done)
 
     # ---- runner ----
+    # The runner lives on its own thread with a plain asyncio loop: on Windows that is a Proactor loop, which
+    # supports subprocesses (PowerShell commands, agent CLIs) independently of the Qt-integrated loop.
     def start_runner(self, roots: list[str], name: str | None, confirm=None) -> None:  # noqa: ANN001
         self.stop_runner()
+        gui_loop = asyncio.get_event_loop()
 
         def status(state: str, detail: str) -> None:
             self.runner_state = state
-            self.runner_status.emit(state, detail)
+            self.runner_status.emit(state, detail)  # Qt queues cross-thread signal emissions
 
-        self.runner = Runner(self.client.url, self.client.token, roots, name=name, confirm_command=confirm, on_status=status)
-        self.runner_task = spawn(self.runner.run_forever())
+        async def confirm_on_gui(command: str) -> bool:
+            # called on the runner thread; the dialog must run on the GUI loop
+            return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(confirm(command), gui_loop))
+
+        runner = Runner(
+            self.client.url, self.client.token, roots, name=name,
+            confirm_command=confirm_on_gui if confirm else None, on_status=status,
+        )
+        started = threading.Event()
+
+        def run() -> None:
+            loop = asyncio.new_event_loop()
+            self.runner_loop = loop
+            asyncio.set_event_loop(loop)
+            started.set()
+            try:
+                loop.run_until_complete(runner.run_forever())
+            except Exception:  # noqa: BLE001
+                log.exception("runner stopped")
+            finally:
+                loop.close()
+
+        self.runner = runner
+        self.runner_thread = threading.Thread(target=run, name="multichat-runner", daemon=True)
+        self.runner_thread.start()
+        started.wait(5)
 
     def stop_runner(self) -> None:
-        if self.runner:
-            spawn(self.runner.stop())
-        if self.runner_task:
-            self.runner_task.cancel()
-        self.runner = None
-        self.runner_task = None
+        runner, loop, thread = self.runner, self.runner_loop, self.runner_thread
+        self.runner = self.runner_loop = self.runner_thread = None
+        if runner and loop and not loop.is_closed():
+            try:
+                asyncio.run_coroutine_threadsafe(runner.stop(), loop)
+            except RuntimeError:
+                pass
+        if thread:
+            thread.join(5)
         self.runner_state = "off"
         self.runner_status.emit("off", "")
 
     async def shutdown(self) -> None:
         if self._events_task:
             self._events_task.cancel()
-        if self.runner:
-            await self.runner.stop()
+        await asyncio.to_thread(self.stop_runner)
         await self.client.close()

@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-if (Get-Command py -ErrorAction SilentlyContinue) { $python = "py -3.12" } else { $python = "python" }
+if (Get-Command py -ErrorAction SilentlyContinue) { $python = "py -3" } else { $python = "python" }
 if (-not (Test-Path .venv)) { Invoke-Expression "$python -m venv .venv" }
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip
 & .\.venv\Scripts\python.exe -m pip install ..\core . "pyinstaller>=6"
