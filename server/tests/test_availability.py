@@ -142,3 +142,55 @@ async def test_config_without_models_fetches_vendor_list(client, vendor_url):
     assert models["good-model"]["source"] == "catalog" and all(m["available"] for m in models.values())
     async with dbmod.sessionmaker()() as db:
         await sync_config(db, base)  # restore: "dyn" disabled again
+
+
+async def test_missing_prices_come_from_openrouter_and_reprice_usage(client, vendor_url, monkeypatch):
+    """OpenAI-style vendors report no prices: OpenRouter's list price fills them and earlier $0 usage is re-priced."""
+    from sqlalchemy import select
+
+    from app import db as dbmod
+    from app import pricing
+    from app.tables import Usage
+
+    async def fake_prices():
+        return {pricing._norm("openai/good-model"): (2.0, 8.0)}
+
+    monkeypatch.setattr(pricing, "openrouter_prices", fake_prices)
+    monkeypatch.setattr(pricing, "VENDORS", [("127.0.0.1", "openai/")])  # the fake vendor plays OpenAI
+    ep = (await client.post("/api/endpoints", json={"name": "vendor-priced", "kind": "openai_compatible", "base_url": vendor_url,
+                                                    "api_key": "right-key"})).json()
+    m = (await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": "good-model"})).json()
+    s = (await client.post("/api/sessions", json={"title": "pricing", "model_ids": [m["id"]]})).json()
+    # usage recorded while the price was unknown
+    async with dbmod.sessionmaker()() as db:
+        from app.tables import Message
+        msg = Message(session_id=s["id"], seq=1, turn_id="t", role="assistant", model_id=m["id"], phase="plan", content="hi", status="complete")
+        db.add(msg)
+        await db.flush()
+        db.add(Usage(message_id=msg.id, model_id=m["id"], session_id=s["id"], input_tokens=1_000_000, output_tokens=500_000, cost=0.0))
+        await db.commit()
+    before = (await client.get(f"/api/sessions/{s['id']}/usage")).json()[0]
+    assert before["cost"] == 0 and before["price_known"] is False
+    await client.post(f"/api/endpoints/{ep['id']}/check")
+    model = (await models_of(client, ep["id"]))["good-model"]
+    assert (model["input_price"], model["output_price"]) == (2.0, 8.0)
+    after = (await client.get(f"/api/sessions/{s['id']}/usage")).json()[0]
+    assert after["price_known"] and abs(after["cost"] - 6.0) < 1e-9  # 1M * $2 + 0.5M * $8
+    assert abs(after["input_cost"] - 2.0) < 1e-9 and abs(after["output_cost"] - 4.0) < 1e-9 and after["replies"] == 1
+    async with dbmod.sessionmaker()() as db:
+        assert (await db.execute(select(Usage.cost).where(Usage.session_id == s["id"]))).scalar_one() == 6.0
+
+
+def test_price_lookup_matches_vendor_ids():
+    from app import pricing
+
+    prices = {pricing._norm(k): v for k, v in {"anthropic/claude-sonnet-4.5": (3, 15), "openai/gpt-5.6-luna": (1, 4),
+                                                "deepseek/deepseek-chat": (0.3, 1.2)}.items()}
+    assert pricing.lookup(prices, "anthropic/", "claude-sonnet-4-5-20250929") == (3, 15)
+    assert pricing.lookup(prices, "openai/", "gpt-5.6-luna") == (1, 4)
+    assert pricing.lookup(prices, "", "openai/gpt-5.6-luna") == (1, 4)  # GitHub Models ids
+    assert pricing.lookup(prices, "deepseek/", "deepseek-chat") == (0.3, 1.2)
+    assert pricing.lookup(prices, "openai/", "unknown-model") is None
+    assert pricing.vendor_prefix("openai_compatible", "https://api.openai.com/v1") == "openai/"
+    assert pricing.vendor_prefix("anthropic", None) == "anthropic/"
+    assert pricing.vendor_prefix("openai_compatible", "https://openrouter.ai/api/v1") is None

@@ -202,3 +202,29 @@ def bars(stats: dict[str, Any], key: str, title: str, fmt=money, width: int = 30
         n = int(round(width * r[key] / top))
         table.add_row(Text(r["display_name"], style=r["color"]), Text("█" * n, style=r["color"]), fmt(r[key]))
     return table
+
+
+def cost_table(rows: list[dict[str, Any]]) -> Table:
+    """Per-model cost of a session (GET /api/sessions/{id}/usage)."""
+    total = sum(r["cost"] for r in rows)
+    t = Table(title="Session cost", expand=True)
+    for col, just in (("Model", "left"), ("Replies", "right"), ("In tok", "right"), ("Out tok", "right"),
+                      ("$/1M in", "right"), ("$/1M out", "right"), ("In $", "right"), ("Out $", "right"),
+                      ("Total", "right"), ("Share", "right")):
+        t.add_column(col, justify=just)
+    for r in rows:
+        unknown = not r.get("price_known", True)
+        approx = "~" if r["estimated"] else ""
+        t.add_row(
+            Text("● " + r["display_name"], style=r["color"]), str(r.get("replies", 0)),
+            f"{approx}{tokens(r['input_tokens'])}", f"{approx}{tokens(r['output_tokens'])}",
+            "?" if unknown else f"{r.get('input_price', 0):g}", "?" if unknown else f"{r.get('output_price', 0):g}",
+            "—" if r.get("input_cost") is None else money(r["input_cost"]),
+            "—" if r.get("output_cost") is None else money(r["output_cost"]),
+            Text("price unknown" if unknown else money(r["cost"]), style="bold"),
+            f"{100 * r['cost'] / total:.0f}%" if total else "—",
+        )
+    t.add_row(Text("Session total", style="bold"), str(sum(r.get("replies", 0) for r in rows)),
+              tokens(sum(r["input_tokens"] for r in rows)), tokens(sum(r["output_tokens"] for r in rows)),
+              "", "", "", "", Text(money(total), style="bold"), "")
+    return t

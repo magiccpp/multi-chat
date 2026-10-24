@@ -15,14 +15,14 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crypto
+from app import crypto, pricing
 from app import db as dbmod
 from app.providers.base import ProviderError
 from app.providers.registry import provider_for
-from app.tables import Endpoint, Model, Runner, SshConnection
+from app.tables import Endpoint, Model, Runner, SshConnection, Usage
 
 log = logging.getLogger(__name__)
 CHECK_TIMEOUT = 45
@@ -108,6 +108,28 @@ async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str,
     return models
 
 
+async def fill_missing_prices(db: AsyncSession, ep: Endpoint, models: list[Model]) -> None:
+    """Vendors like OpenAI don't report prices: take OpenRouter's list price for the same model, and re-price this
+    model's earlier usage that was recorded as $0."""
+    prefix = pricing.vendor_prefix(ep.kind, ep.base_url)
+    missing = [m for m in models if not pricing.has_price(m)]
+    if prefix is None or not missing:
+        return
+    prices = await pricing.openrouter_prices()
+    for m in missing:
+        hit = pricing.lookup(prices, prefix, m.model_name)
+        if not hit:
+            continue
+        m.input_price, m.output_price = hit
+        await db.flush()
+        await db.execute(
+            update(Usage)
+            .where(Usage.model_id == m.id, Usage.cost == 0, (Usage.input_tokens + Usage.output_tokens) > 0)
+            .values(cost=(Usage.input_tokens * hit[0] + Usage.output_tokens * hit[1]) / 1_000_000)
+        )
+        log.info("price for %s/%s from OpenRouter: $%s / $%s per 1M", ep.name, m.model_name, hit[0], hit[1])
+
+
 async def check_endpoint(db: AsyncSession, ep: Endpoint) -> None:
     models = list((await db.execute(select(Model).where(Model.endpoint_id == ep.id))).scalars())
     ep.checked_at = datetime.now(UTC)
@@ -153,6 +175,7 @@ async def check_endpoint(db: AsyncSession, ep: Endpoint) -> None:
             m.available, m.availability_detail = False, f"not offered by {ep.name}"
         else:
             m.available, m.availability_detail = True, ""
+    await fill_missing_prices(db, ep, models)
     ep.status, ep.status_detail = "ok", f"{len(offered)} models offered" if offered else ""
 
 

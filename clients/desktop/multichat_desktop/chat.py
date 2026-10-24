@@ -7,17 +7,22 @@ import re
 from typing import Any
 
 from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QKeyEvent
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QTabBar,
+    QTableWidget,
+    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -180,10 +185,19 @@ class MessageCard(QFrame):
         return "".join(rows)
 
 
+def price_unknown(st, model_id: int | None) -> bool:  # noqa: ANN001
+    """No price configured or found for this model, so its cost reads $0 although tokens were used."""
+    m = st.models.get(model_id or -1)
+    u = st.usage.get(model_id)
+    return bool(m and u and not u.cost and not (m.get("input_price") or m.get("output_price"))
+                and m.get("endpoint_kind") not in ("mock",) and u.input_tokens + u.output_tokens > 0)
+
+
 class CostBar(QFrame):
     """What this session has cost so far, per model and in total. Click a model to open its tab."""
 
     model_clicked = Signal(object)
+    details_clicked = Signal()
 
     def __init__(self, ctl: Controller) -> None:
         super().__init__()
@@ -199,7 +213,7 @@ class CostBar(QFrame):
             item = self.row.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        st, c = self.ctl.st, colors()
+        st = self.ctl.st
         title = QLabel("<b>Session cost</b>")
         title.setTextFormat(Qt.TextFormat.RichText)
         self.row.addWidget(title)
@@ -209,13 +223,18 @@ class CostBar(QFrame):
             u = st.usage.get(mid)
             chip = QToolButton()
             chip.setObjectName("costchip")
-            spent = money(u.cost) if u else "$0"
+            unknown = price_unknown(st, mid)
+            spent = "price unknown" if unknown else (money(u.cost) if u else "$0")
             tok = f" · {'~' if u and u.estimated else ''}{tokens(u.input_tokens + u.output_tokens)} tok" if u else ""
             chip.setText(f"● {st.name(mid)}  {spent}{tok}")
             chip.setStyleSheet(f"QToolButton#costchip {{ color: {st.color(mid)}; }}")
+            tip = f"{st.name(mid)}: no usage yet"
             if u:
-                chip.setToolTip(f"{st.name(mid)}: {u.input_tokens} input + {u.output_tokens} output tokens, {money(u.cost)}"
-                                + (" (estimated)" if u.estimated else ""))
+                tip = (f"{st.name(mid)}: {u.input_tokens:,} input + {u.output_tokens:,} output tokens, {money(u.cost)}"
+                       + (" (token counts estimated)" if u.estimated else ""))
+            if unknown:
+                tip += "\nNo price is known for this model: set its prices in Endpoints (cost per 1M tokens)."
+            chip.setToolTip(tip + "\nClick to show only this model's replies.")
             chip.clicked.connect(lambda _=False, mid=mid: self.model_clicked.emit(mid))
             self.row.addWidget(chip)
         self.row.addStretch(1)
@@ -223,6 +242,75 @@ class CostBar(QFrame):
         total.setTextFormat(Qt.TextFormat.RichText)
         total.setToolTip("Total for this session, all models")
         self.row.addWidget(total)
+        details = QToolButton()
+        details.setObjectName("costchip")
+        details.setText("Details…")
+        details.setToolTip("Cost per model: replies, input and output tokens, prices, input and output cost, share")
+        details.clicked.connect(self.details_clicked.emit)
+        self.row.addWidget(details)
+
+
+class CostDetailsDialog(QDialog):
+    """Per-model cost breakdown of the session (from the server, so it includes models that left)."""
+
+    COLS = ["Model", "Replies", "Input tokens", "Output tokens", "$ / 1M in", "$ / 1M out", "Input cost", "Output cost",
+            "Total", "Share"]
+
+    def __init__(self, ctl: Controller, rows: list[dict], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Session cost — {ctl.st.session.get('title', '')}")
+        self.resize(980, 120 + 34 * (len(rows) + 2))
+        layout = QVBoxLayout(self)
+        total = sum(r["cost"] for r in rows)
+        table = QTableWidget(len(rows) + 1, len(self.COLS))
+        table.setHorizontalHeaderLabels(self.COLS)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+
+        def cell(r: int, c: int, text: str, color: str | None = None, bold: bool = False, tip: str = "") -> None:
+            item = QTableWidgetItem(text)
+            if c > 0:
+                item.setTextAlignment(right)
+            if color:
+                item.setForeground(QColor(color))
+            if bold:
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            if tip:
+                item.setToolTip(tip)
+            table.setItem(r, c, item)
+
+        unknown_tip = "No price known for this model; set it in Endpoints"
+        for r, u in enumerate(rows):
+            unknown = not u.get("price_known", True)
+            approx = "~" if u["estimated"] else ""
+            cell(r, 0, f"● {u['display_name']}", u["color"])
+            cell(r, 1, str(u.get("replies", 0)))
+            cell(r, 2, f"{approx}{u['input_tokens']:,}")
+            cell(r, 3, f"{approx}{u['output_tokens']:,}")
+            cell(r, 4, "?" if unknown else f"{u.get('input_price', 0):g}", tip=unknown_tip if unknown else "")
+            cell(r, 5, "?" if unknown else f"{u.get('output_price', 0):g}", tip=unknown_tip if unknown else "")
+            cell(r, 6, "—" if u.get("input_cost") is None else money(u["input_cost"]))
+            cell(r, 7, "—" if u.get("output_cost") is None else money(u["output_cost"]))
+            cell(r, 8, "price unknown" if unknown else money(u["cost"]), bold=True, tip=unknown_tip if unknown else "")
+            cell(r, 9, f"{100 * u['cost'] / total:.0f}%" if total else "—")
+        n = len(rows)
+        cell(n, 0, "Session total", bold=True)
+        cell(n, 1, str(sum(u.get("replies", 0) for u in rows)), bold=True)
+        cell(n, 2, f"{sum(u['input_tokens'] for u in rows):,}", bold=True)
+        cell(n, 3, f"{sum(u['output_tokens'] for u in rows):,}", bold=True)
+        cell(n, 8, money(total), bold=True)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(table)
+        note = QLabel("Costs are what the vendor reported (OpenRouter) or tokens × the model's price. Models whose vendor "
+                      "doesn't publish prices get OpenRouter's list price for the same model; '~' marks estimated token counts.")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        layout.addWidget(note)
+        self.table = table
 
 
 class ApprovalCard(QFrame):
@@ -310,6 +398,7 @@ class ChatPanel(QWidget):
         layout.addWidget(self.tabs)
         self.cost_bar = CostBar(ctl)
         self.cost_bar.model_clicked.connect(self.show_model_tab)
+        self.cost_bar.details_clicked.connect(self.show_cost_details)
         layout.addWidget(self.cost_bar)
 
         self.scroll = QScrollArea()
@@ -388,12 +477,21 @@ class ChatPanel(QWidget):
         if model_id is None:
             return f"All  {money(st.total_cost())}" if st.usage else "All"
         u = st.usage.get(model_id)
-        return f"{st.name(model_id)}  {money(u.cost)}" if u else st.name(model_id)
+        if not u:
+            return st.name(model_id)
+        return f"{st.name(model_id)}  {'$?' if price_unknown(st, model_id) else money(u.cost)}"
 
     def update_costs(self) -> None:
         for i in range(self.tabs.count()):
             self.tabs.setTabText(i, self._tab_label(self.tabs.tabData(i)))
         self.cost_bar.refresh()
+
+    def show_cost_details(self) -> None:
+        def show(rows: list[dict]) -> None:
+            self.cost_dialog = CostDetailsDialog(self.ctl, rows, self)
+            self.cost_dialog.open()
+
+        self.ctl.call(self.ctl.client.usage(self.ctl.st.session_id), show)
 
     def show_model_tab(self, model_id: int) -> None:
         for i in range(self.tabs.count()):

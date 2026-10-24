@@ -141,8 +141,10 @@ async def sync_config(db: AsyncSession, config: dict[str, Any]) -> dict[str, int
                 db.add(model)
             model.display_name = spec.get("display_name") or mname
             model.color = spec.get("color") or model.color or "#6b7280"
-            model.input_price = float(spec.get("input_price", model.input_price or 0) or 0)
-            model.output_price = float(spec.get("output_price", model.output_price or 0) or 0)
+            # 0 means "not set": keep a price found since (e.g. OpenRouter's list price for an OpenAI model)
+            if float(spec.get("input_price") or 0) > 0 or float(spec.get("output_price") or 0) > 0:
+                model.input_price = float(spec.get("input_price") or 0)
+                model.output_price = float(spec.get("output_price") or 0)
             model.supports_tools = bool(spec.get("supports_tools", True))
             model.enabled = bool(spec.get("enabled", True))
             model.source = "config"

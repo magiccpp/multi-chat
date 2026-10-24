@@ -29,7 +29,7 @@ from app.schemas import (
     UsageRow,
     WorkspaceIn,
 )
-from app.tables import BuilderPick, FileChange, Message, Model, Runner, Session, SessionModel, SshConnection, Usage, Vote
+from app.tables import BuilderPick, Endpoint, FileChange, Message, Model, Runner, Session, SessionModel, SshConnection, Usage, Vote
 from app.workspaces.base import WorkspaceError
 from app.workspaces.factory import workspace_for, workspace_label
 
@@ -291,33 +291,39 @@ async def pick_builder(session_id: int, body: PickBuilderIn, db: AsyncSession = 
 
 @router.get("/{session_id}/usage", response_model=list[UsageRow])
 async def session_usage(session_id: int, db: AsyncSession = Depends(get_db)) -> list[UsageRow]:
+    """Per model: tokens, cost (split into input and output by the model's prices), replies and prices."""
     rows = await db.execute(
         select(
             Usage.model_id,
-            func.coalesce(Model.display_name, "?"),
-            func.coalesce(Model.color, "#6b7280"),
             func.sum(Usage.input_tokens),
             func.sum(Usage.output_tokens),
             func.sum(Usage.cost),
             func.bool_or(Usage.estimated),
+            func.count(func.distinct(Usage.message_id)),
         )
-        .outerjoin(Model, Model.id == Usage.model_id)
         .where(Usage.session_id == session_id)
-        .group_by(Usage.model_id, Model.display_name, Model.color)
+        .group_by(Usage.model_id)
         .order_by(func.sum(Usage.cost).desc())
     )
-    return [
-        UsageRow(
+    out = []
+    for mid, i, o, c, est, replies in rows.all():
+        model = await db.get(Model, mid) if mid else None
+        endpoint = await db.get(Endpoint, model.endpoint_id) if model else None
+        i, o, c = int(i or 0), int(o or 0), float(c or 0)
+        ip, op = (model.input_price or 0, model.output_price or 0) if model else (0, 0)
+        ic, oc = (i * ip / 1_000_000, o * op / 1_000_000) if (ip or op) else (None, None)
+        if ic is not None and c > 0 and ic + oc > 0:
+            scale = c / (ic + oc)  # vendor-reported totals (OpenRouter) win; keep the in/out proportion
+            ic, oc = ic * scale, oc * scale
+        out.append(UsageRow(
             model_id=mid,
-            display_name=name,
-            color=color,
-            input_tokens=int(i or 0),
-            output_tokens=int(o or 0),
-            cost=float(c or 0),
-            estimated=bool(est),
-        )
-        for mid, name, color, i, o, c, est in rows.all()
-    ]
+            display_name=model.display_name if model else "?",
+            color=model.color if model else "#6b7280",
+            input_tokens=i, output_tokens=o, cost=c, estimated=bool(est), replies=int(replies or 0),
+            input_price=ip, output_price=op, price_known=bool(ip or op or c > 0 or (endpoint and endpoint.kind == "mock")),
+            input_cost=ic, output_cost=oc,
+        ))
+    return out
 
 
 @router.get("/{session_id}/changes", response_model=list[FileChangeOut])

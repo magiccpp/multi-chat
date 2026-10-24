@@ -22,7 +22,7 @@ from multichat_client.config import ClientConfig
 from multichat_client.runner.agent import Runner
 from multichat_client.state import SessionState
 from multichat_tui import commands as cmds
-from multichat_tui.render import money, tokens, usage_text
+from multichat_tui.render import cost_table, money, tokens, usage_text
 from multichat_tui.screens import (
     ApprovalScreen,
     ModelsScreen,
@@ -692,8 +692,8 @@ class MultiChatApp(App):
                 else:
                     self.notify("usage: /builder <model>", severity="warning")
             elif name == "mode":
-                if not args or args[0] not in ("shared", "isolated"):
-                    self.notify("usage: /mode shared|isolated", severity="warning")
+                if not args or args[0] not in ("shared", "isolated", "relay"):
+                    self.notify("usage: /mode isolated|shared|relay", severity="warning")
                 else:
                     self.st.session = await c.update_session(sid, context_mode=args[0])
             elif name == "to":
@@ -729,6 +729,8 @@ class MultiChatApp(App):
                 await c.stop(sid)
             elif name == "stats":
                 self.push_screen(TextScreen("Statistics — price and performance per model", stats_body(await c.stats(), compact=self.size.width < 150)))
+            elif name == "cost":
+                self.push_screen(TextScreen("Session cost", cost_table(await c.usage(sid))))
             elif name == "endpoints":
                 if args[:1] == ["check"]:
                     self.notify("checking keys and model lists…")
