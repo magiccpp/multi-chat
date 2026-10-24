@@ -41,6 +41,9 @@ async def test_tui_plan_vote_build(server, client, tmp_path):
     app = MultiChatApp(api, ClientConfig(url=server, token=TOKEN, runner_name=f"tui-{tmp_path.name}"), session_id=s["id"], runner_roots=[str(root)])
     async with app.run_test(size=(150, 46)) as pilot:
         await until(pilot, lambda: app.st.session_id == s["id"] and app.runner_state == "online")
+        # no folder chosen: the TUI's own machine is used, so models can inspect it
+        await until(pilot, lambda: app.st.session.get("workspace_kind") == "runner")
+        assert app.st.session["workspace_path"] == str(root.resolve())
 
         # PLAN: one message fans out to three models
         await send(pilot, app, "Users get logged out after refresh. Where is the bug?")

@@ -104,7 +104,8 @@ Developers can build locally with `clients\desktop\build_exe.ps1` (Python 3.12; 
 
 On first start, enter the server URL and token; the token is kept in Windows Credential Manager. Then:
 
-- **Runner** (left bar): tick *Let MultiChat run tasks on this PC* and add the folders models may use. Commands run in PowerShell with your normal rights. Installs that need admin rights fail rather than elevate. You can also ask to confirm every command locally. Closing the window keeps the runner in the tray.
+- **This PC is used automatically**: the runner is on by default (allowed folder: your user folder), and a session without a folder uses this PC as soon as the runner is online. So in PLAN you can just ask "check my Windows version" or "ssh to my server and check the containers". Choosing *No folder* in the folder dialog keeps that session PC-free; *Runner* settings has the switch to turn the automatic attach off.
+- **Runner** (left bar): *Let MultiChat run tasks on this PC* and the folders models may use. Commands run in PowerShell with your normal rights. Installs that need admin rights fail rather than elevate. You can also ask to confirm every command locally. Closing the window keeps the runner in the tray.
 - **Models (N)**: tick models from any endpoint to join the session. Search filters the list; unavailable models are greyed out with the reason in the tooltip. **Check availability** asks the server to re-check keys now.
 - **＋ New session** starts a session with the current (available) models and opens the model picker. It does nothing while the current session is still empty.
 - **Attachments**: 📎 **Attach** picks files; you can also drop files on the message box or paste a screenshot with **Ctrl+V**. Pending files show as chips (✕ removes). Sent images appear as thumbnails, documents as chips; click to open.

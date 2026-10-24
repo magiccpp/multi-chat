@@ -716,6 +716,7 @@ class OpenFolderDialog(QDialog):
                 coro = self.ctl.client.set_workspace(sid, "runner", path, runner_id=target)
             else:
                 coro = self.ctl.client.set_workspace(sid, "ssh", path, ssh_connection_id=target)
+        settings.set_no_folder(sid, mode == 0)  # an explicit "No folder" is kept; see Controller.attach_this_pc
         self.ctl.call(coro, lambda s: (self.ctl.set_session(s), self.accept()))
 
 
@@ -785,8 +786,9 @@ class RunnerDialog(QDialog):
         self.enabled = QCheckBox("Let MultiChat run tasks on this PC (edit files, run commands, install software)")
         self.enabled.setChecked(settings.runner_enabled())
         layout.addWidget(self.enabled)
-        note = QLabel("Commands run with your normal user rights in PowerShell. Installs that need administrator "
-                      "rights will fail rather than ask for elevation.")
+        note = QLabel("Commands run with your normal user rights in PowerShell. In PLAN models may only run read-only "
+                      "commands (checked before they run); in BUILD the session's approval settings apply. Installs that "
+                      "need administrator rights fail rather than ask for elevation.")
         note.setWordWrap(True)
         note.setObjectName("muted")
         layout.addWidget(note)
@@ -810,6 +812,9 @@ class RunnerDialog(QDialog):
         self.name.setPlaceholderText(os.environ.get("COMPUTERNAME") or "this computer's name")
         form.addRow("Runner name", self.name)
         layout.addLayout(form)
+        self.auto_attach = QCheckBox("Use this PC in sessions without a folder (models can inspect it in PLAN and work on it in BUILD)")
+        self.auto_attach.setChecked(settings.runner_auto_attach())
+        layout.addWidget(self.auto_attach)
         self.confirm = QCheckBox("Also ask me on this PC before every command, even when the session auto-approves")
         self.confirm.setChecked(settings.runner_confirm())
         layout.addWidget(self.confirm)
@@ -828,5 +833,6 @@ class RunnerDialog(QDialog):
         if self.enabled.isChecked() and not roots:
             QMessageBox.warning(self, "Runner", "Add at least one folder.")
             return
-        settings.save_runner(self.enabled.isChecked(), roots, self.name.text().strip(), self.confirm.isChecked())
+        settings.save_runner(self.enabled.isChecked(), roots, self.name.text().strip(), self.confirm.isChecked(),
+                             self.auto_attach.isChecked())
         self.accept()

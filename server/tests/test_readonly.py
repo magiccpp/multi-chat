@@ -122,6 +122,17 @@ READ_ONLY = [
     "gcloud compute instances list",
     "gh pr list",
     "gh api repos/magiccpp/multi-chat",
+    # "check my Windows version" and friends
+    'systeminfo | findstr /B /C:"OS Name" /C:"OS Version"',
+    "Get-ComputerInfo -Property WindowsProductName, WindowsVersion, OsBuildNumber",
+    "[Environment]::OSVersion.Version",
+    "(Get-CimInstance Win32_OperatingSystem).Caption",
+    "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' | Select-Object ProductName, DisplayVersion",
+    "cmd /c ver",
+    "$PSVersionTable.PSVersion",
+    "Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5",
+    'ssh user@server "docker inspect app | jq \'.[0].Config.Env\'"',
+    "ssh user@server 'cd /srv/app && git log -5 --oneline && cat docker-compose.yml'",
     # data that only looks dangerous
     'echo "rm -rf /"',
     "grep -rn install .",

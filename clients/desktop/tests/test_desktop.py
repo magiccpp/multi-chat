@@ -133,6 +133,15 @@ def test_desktop_flow(server, tmp_path, monkeypatch):
         await ctl.open_session(s["id"])
         win.apply_runner_settings()
         await until(lambda: ctl.runner_state == "online")
+        # a session without a folder uses this PC automatically, so models can inspect it in PLAN
+        await until(lambda: ctl.st.session.get("workspace_kind") == "runner")
+        assert ctl.st.session["workspace_path"] == str(work.resolve())
+        # an explicit "No folder" is kept
+        settings.set_no_folder(s["id"], True)
+        ctl.set_session(await api.set_workspace(s["id"], "none"))
+        assert not await ctl.attach_this_pc() and ctl.st.session["workspace_kind"] == "none"
+        settings.set_no_folder(s["id"], False)
+        assert await ctl.attach_this_pc()
 
         # PLAN in shared mode: three models answer, each seeing the previous ones
         win.chat.composer.setPlainText("Users are logged out after refresh. Where is the bug?")

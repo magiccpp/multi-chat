@@ -63,6 +63,7 @@ class Controller(QObject):
         self.recipients = None
         self.session_loaded.emit()
         self._events_task = asyncio.ensure_future(self._follow(session_id))
+        await self.attach_this_pc()
 
     async def open_latest_or_new(self) -> None:
         sessions = await self.client.sessions(limit=1)
@@ -91,6 +92,20 @@ class Controller(QObject):
                 raise
             except Exception:  # noqa: BLE001 - reconnect after network errors
                 await asyncio.sleep(2)
+
+    async def attach_this_pc(self) -> bool:
+        """A session without a folder uses this PC while the runner is online, so models can inspect and work on it."""
+        from multichat_desktop import settings
+
+        s, runner = self.st.session, self.runner
+        if (not s or s.get("workspace_kind") != "none" or runner is None or not runner.runner_id
+                or self.runner_state != "online" or not settings.runner_auto_attach()
+                or s["id"] in settings.no_folder_sessions() or not runner.roots.roots):
+            return False
+        updated = await self.client.set_workspace(s["id"], "runner", str(runner.roots.roots[0]), runner_id=runner.runner_id)
+        if self.st.session.get("id") == updated["id"]:
+            self.set_session(updated)
+        return True
 
     def set_session(self, session: dict) -> None:
         self.st.session = session

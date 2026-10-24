@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from PySide6.QtCore import QSettings
 
@@ -43,14 +44,37 @@ def save_server(url: str, tok: str) -> None:
 
 
 def runner_enabled() -> bool:
-    return str(qsettings().value("runner/enabled", "false")).lower() == "true"
+    # On by default: models need a machine to inspect (PLAN, read-only) and work on (BUILD, with approvals).
+    return str(qsettings().value("runner/enabled", "true")).lower() == "true"
 
 
 def runner_roots() -> list[str]:
-    value = qsettings().value("runner/roots", [])
+    s = qsettings()
+    if not s.contains("runner/roots"):
+        return [os.path.expanduser("~")]
+    value = s.value("runner/roots", [])
     if isinstance(value, str):
         return [value] if value else []
     return [str(v) for v in (value or [])]
+
+
+def runner_auto_attach() -> bool:
+    """Sessions without a folder use this PC (the first allowed folder) while the runner is online."""
+    return str(qsettings().value("runner/auto_attach", "true")).lower() == "true"
+
+
+def no_folder_sessions() -> set[int]:
+    """Sessions where the user explicitly chose "No folder"; auto-attach leaves them alone."""
+    value = qsettings().value("runner/no_folder_sessions", [])
+    if isinstance(value, str):
+        value = [value] if value else []
+    return {int(v) for v in value or []}
+
+
+def set_no_folder(session_id: int, no_folder: bool) -> None:
+    ids = no_folder_sessions()
+    ids = ids | {session_id} if no_folder else ids - {session_id}
+    qsettings().setValue("runner/no_folder_sessions", [str(i) for i in sorted(ids)][-500:])
 
 
 def runner_name() -> str:
@@ -61,8 +85,10 @@ def runner_confirm() -> bool:
     return str(qsettings().value("runner/confirm", "false")).lower() == "true"
 
 
-def save_runner(enabled: bool, roots: list[str], name: str, confirm: bool) -> None:
+def save_runner(enabled: bool, roots: list[str], name: str, confirm: bool, auto_attach: bool | None = None) -> None:
     s = qsettings()
+    if auto_attach is not None:
+        s.setValue("runner/auto_attach", "true" if auto_attach else "false")
     s.setValue("runner/enabled", "true" if enabled else "false")
     s.setValue("runner/roots", roots)
     s.setValue("runner/name", name)

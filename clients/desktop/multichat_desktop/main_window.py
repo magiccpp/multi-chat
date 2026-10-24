@@ -337,6 +337,8 @@ class MainWindow(QMainWindow):
         color = {"online": "#22c55e", "connecting": "#eab308", "offline": "#ef4444", "error": "#ef4444"}.get(state, colors()["muted"])
         self.runner_label.setText(f'<span style="color:{color}">●</span> runner {state}')
         self.runner_label.setToolTip(detail)
+        if state == "online":
+            self.ctl.call(self.ctl.attach_this_pc())
         if state == "error":
             self.statusBar().showMessage(f"runner: {detail}", 10000)
 

@@ -119,6 +119,7 @@ class MultiChatApp(App):
         self.tab_model: int | None = None
         self.recipients: list[int] | None = None
         self.pending_files: list[Path] = []  # /attach — sent with the next message
+        self.no_folder: set[int] = set()  # sessions where /folder none was chosen
         self.quickvote_enabled = True
         self.quickvote_ids: list[int] = []
         self.runner: Runner | None = None
@@ -176,6 +177,8 @@ class MultiChatApp(App):
         def on_status(state: str, detail: str) -> None:
             self.runner_state = state
             self.call_later(self.update_header)
+            if state == "online":
+                self.call_later(self.attach_this_machine)
             if state == "error":
                 self.notify(f"runner: {detail}", severity="error")
 
@@ -219,6 +222,21 @@ class MultiChatApp(App):
         self.update_status()
         self.update_sidebar()
         self._events_task = asyncio.create_task(self._follow(session_id))
+        await self.attach_this_machine()
+
+    async def attach_this_machine(self) -> None:
+        """A session without a folder uses this machine (the runner's first folder) so models can inspect and work on
+        it; `/folder none` opts the session out."""
+        s, r = self.st.session, self.runner
+        if (not s or s.get("workspace_kind") != "none" or r is None or not r.runner_id or self.runner_state != "online"
+                or s["id"] in self.no_folder or not r.roots.roots):
+            return
+        try:
+            self.st.session = await self.client.set_workspace(s["id"], "runner", str(r.roots.roots[0]), runner_id=r.runner_id)
+        except ApiError as exc:
+            self.notify(f"could not attach this machine: {exc.detail}", severity="warning")
+            return
+        self.update_header()
 
     async def _follow(self, session_id: int) -> None:
         while True:
@@ -754,6 +772,7 @@ class MultiChatApp(App):
             return
         spec = " ".join(args)
         if spec == "none":
+            self.no_folder.add(sid)
             self.st.session = await self.client.set_workspace(sid, "none")
         elif spec.startswith("ssh:"):
             _, conn_name, path = spec.split(":", 2)

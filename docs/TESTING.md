@@ -68,21 +68,24 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
    **Endpoints** in the left bar shows each endpoint's status and has **Check all keys now**. Type a question,
    press Enter. Switch **Isolated / Shared** in the toolbar and ask again — in Shared mode later models comment on
    earlier answers. Use the tabs to see one model's thread; ▲/▼ to vote. The status bar shows tokens and $ per model.
-6. **Let it work on this PC**: left bar **Runner** → tick *Let MultiChat run tasks on this PC* → *Add folder…* (e.g.
+6. **It can already look at this PC**: in PLAN ask *"check my Windows version"* — the runner is on by default and
+   sessions without a folder use this PC, so the models run read-only commands such as `systeminfo`. To let them
+   **change** things, continue below.
+7. **Let it work on this PC**: left bar **Runner** → tick *Let MultiChat run tasks on this PC* → *Add folder…* (e.g.
    `C:\Users\you\mc-test`, put a small project or a single `.py` file there) → Save. The status bar shows
    *runner online*.
-7. **Attach the folder**: toolbar folder button → *This PC* → Browse → choose a folder inside the allowed one → Open.
+8. **Attach the folder**: toolbar folder button → *This PC* → Browse → choose a folder inside the allowed one → Open.
    The file tree appears on the left.
-8. **Build**: on the best reply click **★ Pick as builder** (switches to BUILD). Set *Edits: ask* and *Commands: ask*,
+9. **Build**: on the best reply click **★ Pick as builder** (switches to BUILD). Set *Edits: ask* and *Commands: ask*,
    then ask e.g. *"Add a function `greet(name)` to hello.py with a test, then run `python hello.py`"*. Edits open as
    diffs with **Accept / Reject**; commands show an **Approve / Reject** card in the chat. Afterwards the change opens
    as a diff with **Revert this turn**.
-9. **Attachments**: take a screenshot (Win+Shift+S), click in the message box and press **Ctrl+V** — it appears as a
+10. **Attachments**: take a screenshot (Win+Shift+S), click in the message box and press **Ctrl+V** — it appears as a
    chip above the box. Drop a PDF or .docx on the box too, or use **📎 Attach**. Ask *"What's in the screenshot, and
    summarise the PDF"*. Models with vision describe the image; the others say they can't see it.
-10. **New session**: with an empty session open, **＋ New session** does nothing; after a message it creates a session
+11. **New session**: with an empty session open, **＋ New session** does nothing; after a message it creates a session
    and opens the model picker.
-11. **Statistics**: left bar **Stats** — cost, tokens, votes, win rate, latency per model.
+12. **Statistics**: left bar **Stats** — cost, tokens, votes, win rate, latency per model.
 12. Closing the window keeps MultiChat in the tray (so the runner stays available); right-click the tray icon → Quit.
 
 ## If something goes wrong
