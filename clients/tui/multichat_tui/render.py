@@ -52,6 +52,10 @@ def args_summary(arguments: dict[str, Any], limit: int = 80) -> str:
 def message_header(st: SessionState, m: MessageView, *, focused: bool = False) -> Text:
     t = Text()
     t.append(f"#{m.seq} ", style="dim")
+    if m.role == "summary":
+        t.append(f"🗜 {st.name(m.model_id)}", style=f"bold {st.color(m.model_id)}")
+        t.append("  context compacted", style="dim")
+        return t
     if m.role == "user":
         t.append("You", style="bold")
         if m.recipients and len(m.recipients) < len(st.participants):
@@ -227,4 +231,19 @@ def cost_table(rows: list[dict[str, Any]]) -> Table:
     t.add_row(Text("Session total", style="bold"), str(sum(r.get("replies", 0) for r in rows)),
               tokens(sum(r["input_tokens"] for r in rows)), tokens(sum(r["output_tokens"] for r in rows)),
               "", "", "", "", Text(money(total), style="bold"), "")
+    return t
+
+
+def context_table(rows: list[dict[str, Any]]) -> Table:
+    """GET /api/sessions/{id}/context: how full each model's context window is."""
+    t = Table(title="Context windows", expand=True)
+    for col, just in (("Model", "left"), ("Used (est.)", "right"), ("Window", "right"), ("Full", "right"),
+                      ("Compactions", "right"), ("", "left")):
+        t.add_column(col, justify=just)
+    for r in rows:
+        pct = r.get("percent")
+        t.add_row(r["display_name"], f"{r['used']:,}" if r.get("used") is not None else "—",
+                  tokens(r["window"]) if r.get("window") else "—",
+                  Text(f"{pct:.0f}%" if pct is not None else "—", style="yellow" if (pct or 0) >= 70 else ""),
+                  str(r.get("compactions", 0)), Text(r.get("note", ""), style="dim"))
     return t

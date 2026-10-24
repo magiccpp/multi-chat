@@ -149,9 +149,13 @@ class MultiChatClient:
         context_mode: str = "isolated",
         workspace: dict | None = None,
         reuse_empty: bool = False,
+        model_settings: dict[int, dict] | None = None,
     ) -> dict:
-        """`reuse_empty` returns the latest session instead when it has no messages yet."""
+        """`reuse_empty` returns the latest session instead when it has no messages yet. `model_settings`:
+        {model_id: {"context_window": tokens, "effort": "low"|...|"max"}}."""
         body = {"title": title, "model_ids": model_ids or [], "context_mode": context_mode, "reuse_empty": reuse_empty}
+        if model_settings:
+            body["model_settings"] = {str(k): v for k, v in model_settings.items()}
         if workspace:
             body["workspace"] = workspace
         return await self._req("POST", "/api/sessions", json=body)
@@ -167,6 +171,10 @@ class MultiChatClient:
 
     async def set_session_models(self, session_id: int, model_ids: list[int]) -> dict:
         return await self._req("PUT", f"/api/sessions/{session_id}/models", json={"model_ids": model_ids})
+
+    async def update_model_settings(self, session_id: int, model_id: int, **fields: Any) -> dict:
+        """effort (any time; None = default) and context_window (only before the session's first message)."""
+        return await self._req("PATCH", f"/api/sessions/{session_id}/models/{model_id}", json=fields)
 
     async def set_workspace(self, session_id: int, kind: str, path: str | None = None, **ids: Any) -> dict:
         return await self._req("PATCH", f"/api/sessions/{session_id}/workspace", json={"kind": kind, "path": path, **ids})
@@ -245,6 +253,25 @@ class MultiChatClient:
 
     async def file(self, session_id: int, path: str) -> dict:
         return await self._req("GET", f"/api/sessions/{session_id}/workspace/file", params={"path": path})
+
+    async def context_usage(self, session_id: int) -> list[dict]:
+        """Per model: estimated tokens used, context window, percent, compactions."""
+        return await self._req("GET", f"/api/sessions/{session_id}/context")
+
+    async def compact(self, session_id: int, model_ids: list[int] | None = None) -> list[dict]:
+        """Summarise each model's older history now (like Claude Code's /compact)."""
+        return await self._req("POST", f"/api/sessions/{session_id}/compact", json={"model_ids": model_ids}, timeout=600)
+
+    # --- memory (like CLAUDE.md) ---
+    async def memory(self) -> dict:
+        return await self._req("GET", "/api/memory")
+
+    async def set_memory(self, text: str) -> dict:
+        return await self._req("PUT", "/api/memory", json={"text": text})
+
+    async def remember(self, text: str) -> dict:
+        """Add one line to the global memory ("# ..." in the apps)."""
+        return await self._req("POST", "/api/memory/append", json={"text": text})
 
     # --- votes & stats ---
     async def vote(self, ref: int | str, value: int, session_id: int | None = None) -> dict:

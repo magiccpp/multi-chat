@@ -97,6 +97,11 @@ async def import_catalog(db: AsyncSession, ep: Endpoint, catalog: list[dict[str,
             db.add(m)
             models.append(m)
             by_name[m.model_name] = m
+        # facts about the model, whoever created the row
+        if item.get("context_length"):
+            m.context_length = int(item["context_length"])
+        if "supports_effort" in item:
+            m.supports_effort = bool(item["supports_effort"])
         if m.source != "catalog":
             continue  # rows from config.yaml or the API keep their own name and prices
         m.display_name = (item.get("name") or m.display_name)[:100]
@@ -112,8 +117,16 @@ async def fill_missing_prices(db: AsyncSession, ep: Endpoint, models: list[Model
     """Vendors like OpenAI don't report prices: take OpenRouter's list price for the same model, and re-price this
     model's earlier usage that was recorded as $0."""
     prefix = pricing.vendor_prefix(ep.kind, ep.base_url)
+    if prefix is None:
+        return
+    if any(not m.context_length for m in models):
+        contexts = await pricing.openrouter_contexts()
+        for m in models:
+            ctx = None if m.context_length else pricing.lookup(contexts, prefix, m.model_name)
+            if ctx:
+                m.context_length = ctx
     missing = [m for m in models if not pricing.has_price(m)]
-    if prefix is None or not missing:
+    if not missing:
         return
     prices = await pricing.openrouter_prices()
     for m in missing:
@@ -140,6 +153,8 @@ async def check_endpoint(db: AsyncSession, ep: Endpoint) -> None:
     if ep.kind == "mock":
         ep.status, ep.status_detail = "ok", ""
         _set(models, True, "")
+        for m in models:  # the demo models take every setting
+            m.context_length, m.supports_effort = m.context_length or 128_000, True
         return
     if ep.kind == "agent_cli":
         exe = CLI_NAMES.get(ep.driver or "", ep.driver or "?")
@@ -169,6 +184,8 @@ async def check_endpoint(db: AsyncSession, ep: Endpoint) -> None:
     patterns = import_patterns(ep, models)
     if patterns:
         models = await import_catalog(db, ep, catalog, models, patterns)
+    else:
+        await import_catalog(db, ep, catalog, models, [m.model_name for m in models])  # facts for listed models
     offered = {item["id"] for item in catalog}
     for m in models:
         if offered and m.model_name not in offered:

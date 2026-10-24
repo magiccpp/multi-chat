@@ -19,12 +19,21 @@ public struct ModelInfo: Codable, Hashable, Identifiable, Sendable {
     public var available: Bool = true
     public var availabilityDetail: String = ""
     public var supportsImages: Bool = true
+    public var contextLength: Int?
+    public var supportsEffort: Bool = false
+
+    /// Context windows to choose from when a session starts: 256K or the model's maximum when that is over 512K;
+    /// otherwise just the maximum.
+    public var contextChoices: [Int] {
+        guard let max = contextLength, max > 0 else { return [] }
+        return max > 512_000 ? [256_000, max] : [max]
+    }
 }
 
 extension ModelInfo {
     enum CodingKeys: String, CodingKey {
         case id, endpointId, endpointName, endpointKind, modelName, displayName, color, inputPrice, outputPrice, enabled,
-             supportsTools, source, available, availabilityDetail, supportsImages
+             supportsTools, source, available, availabilityDetail, supportsImages, contextLength, supportsEffort
     }
 
     public init(from decoder: Decoder) throws {
@@ -44,6 +53,8 @@ extension ModelInfo {
         available = try c.decodeIfPresent(Bool.self, forKey: .available) ?? true
         availabilityDetail = try c.decodeIfPresent(String.self, forKey: .availabilityDetail) ?? ""
         supportsImages = try c.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? true
+        contextLength = try c.decodeIfPresent(Int.self, forKey: .contextLength)
+        supportsEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsEffort) ?? false
     }
 }
 
@@ -86,6 +97,39 @@ public struct Participant: Codable, Hashable, Sendable {
     public var color: String
     public var endpointKind: String
     public var position: Int
+    /// Chosen when the session started (nil = the model's maximum); fixed afterwards.
+    public var contextWindow: Int?
+    public var contextLength: Int?
+    /// low | medium | high | xhigh | max; nil = the model's default. Can change any time.
+    public var effort: String?
+    public var supportsEffort: Bool?
+}
+
+public enum Effort {
+    public static let levels = ["low", "medium", "high", "xhigh", "max"]
+    public static func label(_ level: String?) -> String {
+        switch level {
+        case "low": "Low"
+        case "medium": "Medium"
+        case "high": "High"
+        case "xhigh": "X-High"
+        case "max": "Max"
+        default: "Default"
+        }
+    }
+}
+
+public func contextLabel(_ tokens: Int?) -> String {
+    guard let t = tokens, t > 0 else { return "default" }
+    let binary = t % 65_536 == 0  // 262,144 = 256K, 1,048,576 = 1M; 256,000 and 128,000 stay decimal
+    if t >= 1_000_000 {
+        let millions = binary ? Double(t) / 1_048_576 : Double(t) / 1_000_000
+        var s = String(format: "%.2f", millions)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s + "M"
+    }
+    return binary ? "\(t / 1024)K" : "\(Int((Double(t) / 1000).rounded()))K"
 }
 
 public struct Session: Codable, Hashable, Identifiable, Sendable {
@@ -175,6 +219,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     }
 
     public var isReply: Bool { role == "assistant" }
+    /// A model's summary of the older conversation, written when its context window was ~80% full.
+    public var isSummary: Bool { role == "summary" }
 }
 
 public struct UsageRow: Codable, Hashable, Sendable {

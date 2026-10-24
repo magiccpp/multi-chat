@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import base64
+import json
 
 from app.agent.tools import shell_note
 from app.providers.base import ChatMessage, ImagePart, ToolCall
@@ -47,6 +48,8 @@ class ContextInput:
     attachments: dict[int, AttachmentData] = field(default_factory=dict)
     supports_images: bool = True
     turn_id: str = ""  # the turn being answered; in shared mode its other replies are still being written
+    memory: str = ""  # the user's global memory (like ~/.claude/CLAUDE.md)
+    project_memory: list[tuple[str, str]] = field(default_factory=list)  # (file name, text) from the folder
 
 
 SEES_OTHERS = ("shared", "relay")
@@ -112,6 +115,11 @@ def system_prompt(ci: ContextInput) -> str:
             f"Workspace: {ws.label}. Root folder: {ws.root} on {ws.os or 'unknown OS'}. File paths in tools are "
             f"relative to the root. {_shell_hint(ws)}"
         )
+
+    if ci.memory.strip():
+        parts.append("Memory — standing instructions and facts from the user; follow them in every reply:\n" + ci.memory.strip())
+    for name, text in ci.project_memory:
+        parts.append(f"Project instructions from {name} in the folder (follow them):\n{text.strip()}")
 
     if ci.phase == "build":
         handoff = _handoff(ci)
@@ -217,10 +225,85 @@ def build_messages(ci: ContextInput) -> list[ChatMessage]:
                 continue  # answered in parallel: still being written
             name = ci.names.get(m.model_id or 0, "Another model")
             out.append(ChatMessage(role="user", content=f"[{name} said]: {m.content.strip()}"))
-    return _merge_users(out)
+    return merge_users(out)
 
 
-def _merge_users(messages: list[ChatMessage]) -> list[ChatMessage]:
+COMPACT_AT = 0.8  # summarise older history when it fills this much of the model's context window
+KEEP_RECENT = 0.3  # ... keeping about this much of the window as the newest messages, word for word
+SUMMARY_SYSTEM = (
+    "You are compacting a long conversation so that it fits your context window. Write a summary that lets you "
+    "continue the work without the full transcript: the user's goals and requirements, decisions made and why, "
+    "what was tried and what happened, important facts (file paths, function names, commands, versions, errors, "
+    "configuration values, hosts), the current state, and open questions or next steps. Keep exact identifiers. "
+    "Use short headed sections and bullet points. Write only the summary."
+)
+
+
+def summary_message(summary: str) -> ChatMessage:
+    return ChatMessage(role="user", content="[Summary of the earlier conversation (written by you when your context "
+                                            f"window was about 80% full)]:\n{summary}")
+
+
+def transcript_for_summary(messages: list[ChatMessage], limit: int) -> str:
+    """The conversation as plain text for the summarising request, at most `limit` characters (oldest cut first)."""
+    lines = []
+    for m in messages:
+        if m.role == "tool":
+            body = m.content if len(m.content) <= 3000 else m.content[:3000] + " …(truncated)"
+            lines.append(f"[tool result]\n{body}")
+            continue
+        text = m.content or ""
+        for c in m.tool_calls or []:
+            text += f"\n[called {c.name} {json.dumps(c.arguments, ensure_ascii=False)[:500]}]"
+        if m.images:
+            text += f"\n[{len(m.images)} image(s)]"
+        lines.append(f"{'User' if m.role == 'user' else 'You'}:\n{text}")
+    out = "\n\n".join(lines)
+    return out if len(out) <= limit else "…(start cut)\n" + out[-limit:]
+
+
+def history_tokens(system: str, messages: list[ChatMessage], overhead: int = 0) -> int:
+    return len(system) // 4 + overhead + sum(estimate_tokens(m) for m in messages)
+
+
+def estimate_tokens(m: ChatMessage) -> int:
+    """Rough token count (≈4 characters per token, images ≈1600) — enough to decide what fits."""
+    n = len(m.content or "") // 4 + 4
+    n += sum(len(json.dumps(c.arguments, ensure_ascii=False)) // 4 + 10 for c in m.tool_calls or [])
+    return n + 1600 * len(m.images or [])
+
+
+def fit_to_window(system: str, messages: list[ChatMessage], window: int, overhead: int = 0) -> tuple[list[ChatMessage], int]:
+    """Keep the newest history that fits a `window`-token context (leaving room for the reply); returns the messages
+    and how many were left out. A tool call always stays together with its results, and the newest exchange is
+    always kept."""
+    reserve = min(16_000, window // 4)
+    budget = window - reserve - len(system) // 4 - overhead
+    units: list[list[ChatMessage]] = []
+    for m in messages:
+        if m.role == "tool" and units:
+            units[-1].append(m)
+        else:
+            units.append([m])
+    kept: list[list[ChatMessage]] = []
+    used = 0
+    for unit in reversed(units):
+        size = sum(estimate_tokens(m) for m in unit)
+        if kept and used + size > budget:
+            break
+        kept.append(unit)
+        used += size
+    kept.reverse()
+    out = [m for unit in kept for m in unit]
+    omitted = len(messages) - len(out)
+    if omitted:
+        note = ChatMessage(role="user", content=f"[{omitted} earlier messages were left out to fit this model's "
+                                                f"{window:,}-token context window.]")
+        out = merge_users([note, *out])
+    return out, omitted
+
+
+def merge_users(messages: list[ChatMessage]) -> list[ChatMessage]:
     merged: list[ChatMessage] = []
     for m in messages:
         if merged and m.role == "user" and merged[-1].role == "user":

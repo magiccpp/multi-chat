@@ -19,6 +19,8 @@ from app.schemas import (
     ChatIn,
     FileChangeOut,
     MessageOut,
+    ModelSettingsIn,
+    ModelSettingsPatch,
     ParticipantOut,
     PickBuilderIn,
     RevertIn,
@@ -43,10 +45,21 @@ async def _get(db: AsyncSession, session_id: int) -> Session:
     return row
 
 
+async def _session_models(db: AsyncSession, session_id: int) -> dict[int, SessionModel]:
+    rows = await db.execute(select(SessionModel).where(SessionModel.session_id == session_id, SessionModel.left_at.is_(None)))
+    return {sm.model_id: sm for sm in rows.scalars()}
+
+
 async def session_out(db: AsyncSession, s: Session) -> SessionOut:
     out = SessionOut.model_validate(s)
+    settings = await _session_models(db, s.id)
     out.participants = [
-        ParticipantOut(model_id=m.id, display_name=m.display_name, color=m.color, endpoint_kind=e.kind, position=i)
+        ParticipantOut(
+            model_id=m.id, display_name=m.display_name, color=m.color, endpoint_kind=e.kind, position=i,
+            context_window=settings[m.id].context_window if m.id in settings else None,
+            context_length=m.context_length, effort=settings[m.id].effort if m.id in settings else None,
+            supports_effort=m.supports_effort,
+        )
         for i, (m, e) in enumerate(await participants(db, s.id))
     ]
     out.workspace_label = await workspace_label(db, s)
@@ -57,6 +70,29 @@ async def session_out(db: AsyncSession, s: Session) -> SessionOut:
     )).one()
     out.cost, out.tokens = float(cost), int(tokens)
     return out
+
+
+def _check_settings(model: Model, context_window: int | None, effort: str | None) -> None:
+    if context_window is not None and model.context_length and context_window > model.context_length:
+        raise HTTPException(422, f"{model.display_name} has a context window of at most {model.context_length:,} tokens")
+    if effort is not None and not model.supports_effort:
+        raise HTTPException(422, f"{model.display_name} doesn't support a reasoning effort setting")
+
+
+async def _apply_settings(db: AsyncSession, session_id: int, settings: dict[int, ModelSettingsIn]) -> None:
+    """Settings chosen when a session starts (or while it is still empty)."""
+    current = await _session_models(db, session_id)
+    for model_id, cfg in settings.items():
+        sm = current.get(model_id)
+        if sm is None:
+            raise HTTPException(422, f"model {model_id} is not in this session")
+        model = await db.get(Model, model_id)
+        _check_settings(model, cfg.context_window, cfg.effort)
+        sm.context_window, sm.effort = cfg.context_window, cfg.effort
+
+
+async def _has_messages(db: AsyncSession, session_id: int) -> bool:
+    return (await db.execute(select(Message.id).where(Message.session_id == session_id).limit(1))).first() is not None
 
 
 async def _set_models(db: AsyncSession, session_id: int, model_ids: list[int]) -> None:
@@ -128,6 +164,8 @@ async def create_session(body: SessionIn, db: AsyncSession = Depends(get_db)) ->
                     await _apply_workspace(db, latest, body.workspace)
                 if body.model_ids:
                     await _set_models(db, latest.id, body.model_ids)
+                await db.flush()
+                await _apply_settings(db, latest.id, body.model_settings)
                 await db.commit()
                 await db.refresh(latest)
                 return await session_out(db, latest)
@@ -142,6 +180,8 @@ async def create_session(body: SessionIn, db: AsyncSession = Depends(get_db)) ->
     await db.flush()
     await _apply_workspace(db, s, body.workspace)
     await _set_models(db, s.id, body.model_ids)
+    await db.flush()
+    await _apply_settings(db, s.id, body.model_settings)
     await db.commit()
     await db.refresh(s)
     return await session_out(db, s)
@@ -172,6 +212,32 @@ async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)) ->
     await turns.stop(session_id)
     await db.delete(await _get(db, session_id))
     await db.commit()
+
+
+@router.patch("/{session_id}/models/{model_id}", response_model=SessionOut)
+async def update_model_settings(
+    session_id: int, model_id: int, body: ModelSettingsPatch, db: AsyncSession = Depends(get_db)
+) -> SessionOut:
+    """Change a participant's effort (any time) or context window (only before the first message)."""
+    s = await _get(db, session_id)
+    sm = (await _session_models(db, session_id)).get(model_id)
+    if sm is None:
+        raise HTTPException(404, "that model is not in this session")
+    model = await db.get(Model, model_id)
+    sent = body.model_fields_set
+    if "context_window" in sent and body.context_window != sm.context_window:
+        if await _has_messages(db, session_id):
+            raise HTTPException(409, "the context window is chosen when a session starts and can't be changed afterwards; start a new session")
+        _check_settings(model, body.context_window, None)
+        sm.context_window = body.context_window
+    if "effort" in sent:
+        _check_settings(model, None, body.effort)
+        sm.effort = body.effort
+    await db.commit()
+    await db.refresh(s)
+    out = await session_out(db, s)
+    bus.publish(session_id, {"type": "session", "session": out.model_dump(mode="json")})
+    return out
 
 
 @router.put("/{session_id}/models", response_model=SessionOut)
@@ -254,6 +320,27 @@ async def events(session_id: int, db: AsyncSession = Depends(get_db)) -> Streami
     await _get(db, session_id)
     subscription = bus.subscribe(session_id, replay=True, until_turn_end=False)
     return StreamingResponse(_stream(subscription), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.get("/{session_id}/context")
+async def context_usage(session_id: int, db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """How full each model's context window is (estimated), like Claude Code's /context."""
+    await _get(db, session_id)
+    return await turns.context_report(session_id)
+
+
+class CompactIn(BaseModel):
+    model_ids: list[int] | None = None  # default: every model in the session
+
+
+@router.post("/{session_id}/compact")
+async def compact(session_id: int, body: CompactIn | None = None, db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Summarise the older history of each model now, like Claude Code's /compact."""
+    await _get(db, session_id)
+    try:
+        return await turns.compact_now(session_id, body.model_ids if body else None)
+    except TurnError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/{session_id}/stop")

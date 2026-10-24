@@ -67,6 +67,27 @@ final class MultiChatKitTests: XCTestCase {
          "checked_at": "2026-10-24T10:00:00Z", "auto_models": true}
         """)
         XCTAssertEqual(ep.status, "ok")
+
+        let big = try decode([ModelInfo].self, """
+        [{"id": 1, "endpoint_id": 1, "endpoint_name": "or", "endpoint_kind": "openai_compatible", "model_name": "x",
+          "display_name": "X", "color": "#000000", "input_price": 1, "output_price": 2, "enabled": true,
+          "supports_tools": true, "source": "catalog", "context_length": 1000000, "supports_effort": true}]
+        """)[0]
+        XCTAssertEqual(big.contextChoices, [256_000, 1_000_000])
+        XCTAssertTrue(big.supportsEffort)
+        XCTAssertEqual(contextLabel(256_000), "256K")
+        XCTAssertEqual(contextLabel(1_048_576), "1M")
+        XCTAssertEqual(contextLabel(262_144), "256K")
+        XCTAssertEqual(contextLabel(2_000_000), "2M")
+        XCTAssertEqual(contextLabel(128_000), "128K")
+        XCTAssertEqual(contextLabel(256_000), "256K")
+        let p = try decode(Participant.self, """
+        {"model_id": 1, "display_name": "X", "color": "#000", "endpoint_kind": "mock", "position": 0,
+         "context_window": 256000, "context_length": 1000000, "effort": "high", "supports_effort": true}
+        """)
+        XCTAssertEqual(p.effort, "high")
+        XCTAssertEqual(p.contextWindow, 256_000)
+        XCTAssertEqual(Effort.label("xhigh"), "X-High")
     }
 
     func testSSEParser() {
@@ -154,6 +175,21 @@ final class MultiChatKitTests: XCTestCase {
         XCTAssertEqual(withAttachment.last { $0.role == "user" }?.attachments.map(\.filename), ["notes.md"])
         let downloaded = try await api.attachmentData(doc.id)
         XCTAssertEqual(downloaded, Data("# Notes\nSwift 6\n".utf8))
+
+        // memory and manual compaction
+        _ = try await api.setMemory("- answer briefly")
+        let mem = try await api.memory()
+        XCTAssertEqual(mem.text, "- answer briefly")
+        _ = try await api.setMemory("")
+        try await api.compact(s.id)
+        let afterCompact = try await api.messages(s.id)
+        XCTAssertTrue(afterCompact.contains { $0.isSummary })
+
+        // effort per model, any time
+        if let id = ids.first, models.first(where: { $0.id == id })?.supportsEffort == true {
+            let updated = try await api.setEffort(s.id, modelId: id, effort: "high")
+            XCTAssertEqual(updated.participants.first { $0.modelId == id }?.effort, "high")
+        }
 
         // reuse_empty: a fresh session is reused instead of piling up blank ones
         let blank = try await api.createSession(title: "blank", modelIds: Array(ids), reuseEmpty: true)

@@ -109,13 +109,39 @@ public final class APIClient: Sendable {
     public func changes(_ id: Int) async throws -> [FileChange] { try await get("api/sessions/\(id)/changes") }
 
     /// `reuseEmpty`: if the latest session has no messages yet, the server updates and returns it instead.
-    public func createSession(title: String, modelIds: [Int], contextMode: String = "isolated", reuseEmpty: Bool = false) async throws -> Session {
-        try await call("POST", "api/sessions", json: [
+    /// `contextWindows`: model id -> tokens of history it gets (chosen now, fixed once the session has messages).
+    public func createSession(title: String, modelIds: [Int], contextMode: String = "isolated", reuseEmpty: Bool = false,
+                              contextWindows: [Int: Int] = [:]) async throws -> Session {
+        var settings: [String: JSONValue] = [:]
+        for (id, window) in contextWindows { settings[String(id)] = .object(["context_window": .number(Double(window))]) }
+        return try await call("POST", "api/sessions", json: [
             "title": .string(title),
             "model_ids": .array(modelIds.map { .number(Double($0)) }),
             "context_mode": .string(contextMode),
             "reuse_empty": .bool(reuseEmpty),
+            "model_settings": .object(settings),
         ])
+    }
+
+    // MARK: memory and context (like Claude Code's CLAUDE.md, /compact)
+
+    public struct Memory: Codable, Sendable { public var text: String }
+
+    /// The global memory every model gets in every session.
+    public func memory() async throws -> Memory { try await get("api/memory") }
+
+    public func setMemory(_ text: String) async throws -> Memory {
+        try await call("PUT", "api/memory", json: ["text": .string(text)])
+    }
+
+    /// Summarise each model's older history now (also happens automatically at 80% of the context window).
+    public func compact(_ sessionId: Int) async throws {
+        let _: JSONValue = try await call("POST", "api/sessions/\(sessionId)/compact", json: [:])
+    }
+
+    /// Reasoning effort for one model in a session (nil = default); can change any time.
+    public func setEffort(_ sessionId: Int, modelId: Int, effort: String?) async throws -> Session {
+        try await call("PATCH", "api/sessions/\(sessionId)/models/\(modelId)", json: ["effort": effort.map { .string($0) } ?? .null])
     }
 
     /// Re-check every endpoint's key and model list now.

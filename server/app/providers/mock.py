@@ -36,7 +36,7 @@ class MockProvider(Provider):
         self.delay = float(query.get("delay", ["0"])[0])
 
     async def stream(
-        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec]
+        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec], effort: str | None = None
     ) -> AsyncIterator[StreamEvent]:
         offered = {t.name for t in tools}
         calls: list[ToolCall] = []
@@ -60,6 +60,19 @@ class MockProvider(Provider):
             text = f"[{model}] My take on: {first_line[:160]}"
             if others:
                 text += f" (I read {others} other answer{'s' if others > 1 else ''}.)"
+            if effort:
+                text += f" (effort: {effort})"
+            omitted = re.search(r"\[(\d+) earlier messages were left out", "\n".join(m.content or "" for m in messages))
+            if omitted:
+                text += f" (context: {omitted.group(1)} earlier messages left out)"
+            if "Memory — standing instructions" in system:
+                text += f" (memory: {system.split('Memory — standing instructions', 1)[1].count(chr(10) + '- ')} items)"
+            for name in re.findall(r"Project instructions from (\S+) in the folder", system):
+                text += f" (project instructions: {name})"
+            if any("[Summary of the earlier conversation" in (m.content or "") for m in messages):
+                text += " (working from a summary)"
+            if "You are compacting a long conversation" in system:
+                text = f"[{model}] Summary: the user sent {user_text.count('User:')} long messages about details."
             if last.images:
                 text += f" (I see {len(last.images)} image{'s' if len(last.images) > 1 else ''}.)"
             docs = re.findall(r'<attachment name="([^"]+)"', user_text)

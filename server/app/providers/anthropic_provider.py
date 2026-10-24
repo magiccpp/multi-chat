@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -20,6 +21,9 @@ from app.providers.base import (
     ToolSpec,
     UsageEvent,
 )
+
+# Claude models that accept output_config.effort: Opus 4.5 and every 4.6+ / 5.x model.
+EFFORT_MODELS = re.compile(r"claude-(opus-4-5|[a-z]+-4-[6-9]|[a-z]+-[5-9])")
 
 
 def to_anthropic_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
@@ -58,7 +62,7 @@ class AnthropicProvider(Provider):
         self.client = AsyncAnthropic(api_key=api_key, base_url=base_url or None, max_retries=2)
 
     async def stream(
-        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec]
+        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec], effort: str | None = None
     ) -> AsyncIterator[StreamEvent]:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -68,6 +72,11 @@ class AnthropicProvider(Provider):
         }
         if system:
             kwargs["system"] = system
+        if effort:
+            # output_config.effort (GA): low ... max; Opus 4.5 only knows low/medium/high
+            if "opus-4-5" in model and effort in ("xhigh", "max"):
+                effort = "high"
+            kwargs["output_config"] = {"effort": effort}
         if tools:
             kwargs["tools"] = [
                 {"name": t.name, "description": t.description, "input_schema": t.parameters} for t in tools
@@ -121,7 +130,12 @@ class AnthropicProvider(Provider):
             page = await self.client.models.list(limit=100)
         except anthropic.AnthropicError as exc:
             raise ProviderError(str(exc)) from exc
-        return [
-            {"id": m.id, "name": getattr(m, "display_name", None) or m.id, "chat": True, "supports_images": True, "supports_tools": True}
-            for m in page.data
-        ]
+        result = []
+        for m in page.data:
+            item = {"id": m.id, "name": getattr(m, "display_name", None) or m.id, "chat": True, "supports_images": True,
+                    "supports_tools": True, "supports_effort": bool(EFFORT_MODELS.search(m.id))}
+            ctx = getattr(m, "max_input_tokens", None)
+            if isinstance(ctx, int) and ctx > 0:
+                item["context_length"] = ctx
+            result.append(item)
+        return result

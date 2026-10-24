@@ -27,7 +27,7 @@ from rich.console import Console
 
 from multichat_client import config as cfgmod
 from multichat_client.client import ApiError, MultiChatClient
-from multichat_client.state import MessageView, SessionState
+from multichat_client.state import MessageView, SessionState, context_choices
 from multichat_tui.commands import match_model
 from multichat_tui.render import message_body, message_header, money, stats_table, usage_text
 
@@ -72,7 +72,17 @@ async def cmd_run(args: argparse.Namespace) -> int:
             workspace = None
             if args.folder:
                 workspace = await _workspace_spec(c, args.folder)
-            sid = (await c.create_session(title, ids, args.mode, workspace))["id"]
+            settings: dict[int, dict] = {}
+            for m in [x for x in models if x["id"] in ids]:
+                cfg = {}
+                if args.effort and m.get("supports_effort"):
+                    cfg["effort"] = args.effort
+                choices = context_choices(m.get("context_length"))
+                if args.context and len(choices) > 1:
+                    cfg["context_window"] = choices[0] if args.context == "256k" else choices[-1]
+                if cfg:
+                    settings[m["id"]] = cfg
+            sid = (await c.create_session(title, ids, args.mode, workspace, model_settings=settings))["id"]
         session = await c.session(sid)
         st = SessionState()
         st.load(session, [], [], models)
@@ -271,6 +281,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--json", action="store_true")
     r.add_argument("--session", type=int, dest="session")
     r.add_argument("--attach", action="append", metavar="FILE", help="attach a document or image (repeatable)")
+    r.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="reasoning effort for models that support it")
+    r.add_argument("--context", choices=["256k", "max"], help="context window for models over 512K (others use their max)")
 
     v = sub.add_parser("vote", help="vote on a reply")
     v.add_argument("ref", help="message id, or #n (per-session index)")

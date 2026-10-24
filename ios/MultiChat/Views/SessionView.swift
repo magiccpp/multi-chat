@@ -115,6 +115,16 @@ struct SessionView: View {
                     }
                 }
             }
+            Menu("Effort") {
+                ForEach(model.state.participants.filter { $0.supportsEffort == true }, id: \.modelId) { p in
+                    Picker("\(p.displayName) · \(contextLabel(p.contextWindow ?? p.contextLength))",
+                           selection: Binding(get: { p.effort ?? "" }, set: { model.setEffort(p.modelId, $0.isEmpty ? nil : $0) })) {
+                        Text("Default").tag("")
+                        ForEach(Effort.levels, id: \.self) { Text(Effort.label($0)).tag($0) }
+                    }
+                }
+            }
+            .disabled(!model.state.participants.contains { $0.supportsEffort == true })
             Menu("Approvals") {
                 Picker("Edits", selection: Binding(get: { model.session?.approveEdits ?? "auto" }, set: { model.setApproval(edits: $0) })) {
                     Text("Edits: auto").tag("auto")
@@ -128,6 +138,8 @@ struct SessionView: View {
             Divider()
             Button { showModels = true } label: { Label("Models in session", systemImage: "person.3") }
             Button { showFolder = true } label: { Label("Folder", systemImage: "folder") }
+            Button { model.compact() } label: { Label("Compact context now", systemImage: "rectangle.compress.vertical") }
+                .disabled(model.state.busy || model.state.messages.isEmpty)
             Button { newTitle = model.session?.title ?? ""; renaming = true } label: { Label("Rename", systemImage: "pencil") }
             Button(role: .destructive) { model.revertLastTurn() } label: { Label("Revert last turn's files", systemImage: "arrow.uturn.backward") }
         } label: {

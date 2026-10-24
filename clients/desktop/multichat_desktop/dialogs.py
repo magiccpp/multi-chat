@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multichat_client.state import EFFORT_LABELS, EFFORTS, choice_label, context_choices
 from multichat_desktop import settings
 from multichat_desktop.controller import Controller
 
@@ -91,13 +92,20 @@ class ModelsDialog(QDialog):
     """Pick the models (from any endpoint) that join this session; can be changed any time.
 
     Models the server currently can't use (no or rejected key, not offered by the vendor) are greyed out and can't be
-    ticked; the tooltip says why. A model already in the session stays tickable so it can be removed."""
+    ticked; the tooltip says why. A model already in the session stays tickable so it can be removed.
+
+    Ticked models get a Context choice (256K, or the model's 1M maximum; only while the session has no messages)
+    and an Effort choice (any time)."""
 
     def __init__(self, ctl: Controller, parent: QWidget | None = None, title: str = "Models in this session") -> None:
         super().__init__(parent)
         self.ctl = ctl
         self.setWindowTitle(title)
-        self.resize(640, 620)
+        self.resize(860, 640)
+        self.settings: dict[int, dict] = {}  # model id -> {"context_window", "effort"} as chosen here
+        for p in ctl.st.participants:
+            self.settings[p["model_id"]] = {"context_window": p.get("context_window"), "effort": p.get("effort")}
+        self.context_editable = not ctl.st.messages  # fixed once the session has started
         layout = QVBoxLayout(self)
         note = QLabel("Tick the models that take part. Greyed-out models are unavailable right now (hover for the reason). "
                       "Agent CLIs (Claude Code, Cursor, Copilot) run where the folder is, so they need a folder on this PC "
@@ -120,8 +128,8 @@ class ModelsDialog(QDialog):
         row.addWidget(self.refresh_btn)
         layout.addLayout(row)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Model", "Vendor id", "$ in / out per 1M"])
-        self.tree.itemChanged.connect(lambda *_: self._update_count())
+        self.tree.setHeaderLabels(["Model", "Vendor id", "$ in / out per 1M", "Context", "Effort"])
+        self.tree.itemChanged.connect(self._item_changed)
         layout.addWidget(self.tree, 1)
         self.count = QLabel()
         self.count.setObjectName("muted")
@@ -167,10 +175,58 @@ class ModelsDialog(QDialog):
                     else:
                         item.setText(0, f"{m['display_name']}  (unavailable)")
                 group.addChild(item)
+                if m["id"] in checked:
+                    self._add_setting_widgets(item, m)
             group.setExpanded(True)
         self.tree.resizeColumnToContents(0)
+        self.tree.setColumnWidth(3, 230)
         self.tree.blockSignals(False)
         self._apply_filter()
+
+    # ---- per-model settings (only ticked models get widgets: OpenRouter lists hundreds of models) ----
+    def _model(self, model_id: int) -> dict:
+        return next(m for m in self.ctl.models if m["id"] == model_id)
+
+    def _item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        mid = item.data(0, Qt.ItemDataRole.UserRole)
+        if column == 0 and mid is not None:
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self._add_setting_widgets(item, self._model(mid))
+            else:
+                self.tree.removeItemWidget(item, 3)
+                self.tree.removeItemWidget(item, 4)
+        self._update_count()
+
+    def _add_setting_widgets(self, item: QTreeWidgetItem, m: dict) -> None:
+        cfg = self.settings.setdefault(m["id"], {"context_window": None, "effort": None})
+        new_here = m["id"] not in {p["model_id"] for p in self.ctl.st.participants}
+        choices = context_choices(m.get("context_length"))
+        if self.context_editable and new_here and cfg["context_window"] is None and len(choices) > 1:
+            cfg["context_window"] = choices[0]  # default for a new session: 256K (cheaper than resending 1M)
+        ctx = QComboBox()
+        if choices:
+            for tokens in choices:
+                ctx.addItem(choice_label(tokens, choices), tokens)
+            current = cfg["context_window"] or choices[-1]
+            ctx.setCurrentIndex(max(0, ctx.findData(current)))
+        else:
+            ctx.addItem("default", None)
+        ctx.setEnabled(self.context_editable and len(choices) > 1)
+        ctx.setToolTip("How much conversation history this model gets. " + (
+            "Chosen when the session starts; it can't be changed later." if self.context_editable
+            else "Fixed: chosen when this session started. Start a new session to change it."))
+        ctx.currentIndexChanged.connect(lambda _i, mid=m["id"], w=ctx: self.settings[mid].__setitem__("context_window", w.currentData()))
+        eff = QComboBox()
+        eff.addItem("Default", None)
+        for level in EFFORTS:
+            eff.addItem(EFFORT_LABELS[level], level)
+        eff.setCurrentIndex(max(0, eff.findData(cfg["effort"])))
+        eff.setEnabled(bool(m.get("supports_effort")))
+        eff.setToolTip("Reasoning effort; can be changed any time." if m.get("supports_effort")
+                       else "This model has no reasoning-effort setting.")
+        eff.currentIndexChanged.connect(lambda _i, mid=m["id"], w=eff: self.settings[mid].__setitem__("effort", w.currentData()))
+        self.tree.setItemWidget(item, 3, ctx)
+        self.tree.setItemWidget(item, 4, eff)
 
     def _items(self):  # noqa: ANN202
         for i in range(self.tree.topLevelItemCount()):
@@ -223,7 +279,53 @@ class ModelsDialog(QDialog):
     def _save(self) -> None:
         keep = [p["model_id"] for p in self.ctl.st.participants]
         chosen = self.selected()
-        self.ctl.set_models([m for m in keep if m in chosen] + [m for m in chosen if m not in keep])
+        ordered = [m for m in keep if m in chosen] + [m for m in chosen if m not in keep]
+        sid, client = self.ctl.st.session_id, self.ctl.client
+        before = {p["model_id"]: p for p in self.ctl.st.participants}
+
+        async def go() -> dict:
+            session = await client.set_session_models(sid, ordered)
+            for mid in ordered:
+                cfg, old = self.settings.get(mid, {}), before.get(mid, {})
+                changes = {}
+                if cfg.get("effort") != old.get("effort"):
+                    changes["effort"] = cfg.get("effort")
+                if self.context_editable and cfg.get("context_window") != old.get("context_window"):
+                    changes["context_window"] = cfg.get("context_window")
+                if changes:
+                    session = await client.update_model_settings(sid, mid, **changes)
+            return session
+
+        self.ctl.call(go(), self.ctl.set_session)
+        self.accept()
+
+
+class MemoryDialog(QDialog):
+    """Global memory (like ~/.claude/CLAUDE.md): standing instructions every model gets in every session."""
+
+    def __init__(self, ctl: Controller, data: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.ctl = ctl
+        self.setWindowTitle("Memory")
+        self.resize(640, 480)
+        layout = QVBoxLayout(self)
+        intro = QLabel("Every model gets this in its instructions, in every session. Tip: a message starting with # "
+                       "(e.g. \"# the prod server is nuc2\") is saved here instead of being sent.\n"
+                       f"Project memory: {', '.join(data.get('project_files', []))} at the root of a session's folder "
+                       "are read too.")
+        intro.setWordWrap(True)
+        intro.setObjectName("muted")
+        layout.addWidget(intro)
+        self.text = QPlainTextEdit(data.get("text", ""))
+        self.text.setPlaceholderText("- Always answer in English\n- Prefer PowerShell 7 commands\n- The prod host is nuc2")
+        layout.addWidget(self.text, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self._save)
+        bb.rejected.connect(self.reject)
+        layout.addWidget(bb)
+
+    def _save(self) -> None:
+        self.ctl.call(self.ctl.client.set_memory(self.text.toPlainText()), lambda _: self.ctl.notice.emit("Memory saved"))
         self.accept()
 
 

@@ -3,27 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from app import db as dbmod
-from app.agent.context import AttachmentData, ContextInput, WorkspaceView, build_messages, system_prompt
+from app import memory
+from app.agent.context import (
+    COMPACT_AT,
+    KEEP_RECENT,
+    SUMMARY_SYSTEM,
+    AttachmentData,
+    ContextInput,
+    WorkspaceView,
+    build_messages,
+    fit_to_window,
+    history_tokens,
+    merge_users,
+    summary_message,
+    system_prompt,
+    transcript_for_summary,
+)
 from app.agent.events import bus
 from app.agent.tools import ToolContext, execute, tools_for
 from app.config import get_settings
 from app.config_sync import get_setting
 from app.pricing import cost_for
-from app.providers.base import ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
+from app.providers.base import ChatMessage, ProviderError, TextDelta, ToolCall, ToolCallEvent, UsageEvent
 from app.providers.registry import provider_for
-from app.tables import Attachment, Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
-from app.workspaces.base import Workspace, WorkspaceError
+from app.tables import Attachment, Compaction, Endpoint, FileChange, Message, Model, Session, SessionModel, Usage, Vote
+from app.workspaces.base import NoWorkspace, Workspace, WorkspaceError
 from app.workspaces.factory import workspace_for
 
 log = logging.getLogger(__name__)
@@ -31,6 +47,18 @@ log = logging.getLogger(__name__)
 
 class TurnError(Exception):
     pass
+
+
+@dataclass
+class ModelContext:
+    session: Session
+    system: str
+    history: list
+    effort: str | None
+    window: int | None  # the model's context window in this session
+    used: int  # estimated tokens of system + history + tools before any trimming
+    ci: ContextInput
+    prefix: list  # [summary message] when an earlier compaction applies
 
 
 @dataclass
@@ -166,6 +194,42 @@ class TurnManager:
             pass
         return True
 
+    async def context_report(self, session_id: int) -> list[dict[str, Any]]:
+        """Per participant: estimated tokens of its history now, its context window, and compactions so far (like
+        Claude Code's /context). Agent CLIs manage their own context."""
+        out = []
+        async with dbmod.sessionmaker()() as db:
+            for model, endpoint in await participants(db, session_id):
+                n = (await db.execute(select(func.count(Compaction.id)).where(
+                    Compaction.session_id == session_id, Compaction.model_id == model.id))).scalar_one()
+                if endpoint.kind == "agent_cli":
+                    out.append({"model_id": model.id, "display_name": model.display_name, "used": None, "window": None,
+                                "percent": None, "compactions": n, "note": "the agent CLI manages its own context"})
+                    continue
+                ctx = await self._context(db, session_id, model, NoWorkspace(), False)
+                pct = round(100 * ctx.used / ctx.window, 1) if ctx.window else None
+                out.append({"model_id": model.id, "display_name": model.display_name, "used": ctx.used,
+                            "window": ctx.window, "percent": pct, "compactions": n,
+                            "note": f"compacts automatically at {int(COMPACT_AT * 100)}%" if ctx.window else "window unknown"})
+        return out
+
+    async def compact_now(self, session_id: int, model_ids: list[int] | None = None) -> list[dict[str, Any]]:
+        """Summarise each model's older history now (Claude Code's /compact)."""
+        if self.busy(session_id):
+            raise TurnError("a turn is running; wait for it to finish")
+        turn_id = f"compact-{uuid.uuid4().hex[:12]}"
+        results = []
+        async with dbmod.sessionmaker()() as db:
+            targets = [(m, e) for m, e in await participants(db, session_id)
+                       if e.kind != "agent_cli" and (not model_ids or m.id in model_ids)]
+        for model, endpoint in targets:
+            async with dbmod.sessionmaker()() as db:
+                ctx = await self._context(db, session_id, model, NoWorkspace(), False)
+            ctx.window = ctx.window or 128_000
+            done = await self._compact(session_id, turn_id, model, provider_for(endpoint), ctx, manual=True)
+            results.append({"model_id": model.id, "display_name": model.display_name, "compacted": done})
+        return results
+
     async def wait(self, session_id: int) -> None:
         task = self.tasks.get(session_id)
         if task is not None:
@@ -213,11 +277,18 @@ class TurnManager:
             await workspace.close()
 
     async def _context(
-        self, db: AsyncSession, session_id: int, model: Model, workspace: Workspace, has_tools: bool, turn_id: str = ""
-    ) -> tuple[Session, str, list]:
+        self, db: AsyncSession, session_id: int, model: Model, workspace: Workspace, has_tools: bool, turn_id: str = "",
+        tools: list | None = None, project_memory: list[tuple[str, str]] | None = None,
+    ) -> ModelContext:
         session = await db.get(Session, session_id)
         await db.refresh(session)
         messages = list((await db.execute(select(Message).where(Message.session_id == session_id).order_by(Message.id))).scalars())
+        compaction = (await db.execute(
+            select(Compaction).where(Compaction.session_id == session_id, Compaction.model_id == model.id)
+            .order_by(Compaction.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        if compaction:  # the summary stands in for everything before it
+            messages = [m for m in messages if m.id >= compaction.before_message_id]
         names = {m.id: m.display_name for m in (await db.execute(select(Model))).scalars()}
         votes = {
             v.message_id: v.value
@@ -240,8 +311,74 @@ class TurnManager:
             attachments=await load_attachments(db, messages),
             supports_images=model.supports_images,
             turn_id=turn_id,
+            memory=await memory.load(db),
+            project_memory=project_memory or [],
         )
-        return session, system_prompt(ci), build_messages(ci)
+        system = system_prompt(ci)
+        prefix = [summary_message(compaction.summary)] if compaction else []
+        history = merge_users([*prefix, *build_messages(ci)])
+        sm = (await db.execute(select(SessionModel).where(
+            SessionModel.session_id == session_id, SessionModel.model_id == model.id, SessionModel.left_at.is_(None)
+        ))).scalar_one_or_none()
+        window = (sm.context_window if sm else None) or model.context_length
+        overhead = sum(len(t.description) + len(json.dumps(t.parameters)) for t in tools or []) // 4
+        used = history_tokens(system, history, overhead)
+        if window:
+            history, _ = fit_to_window(system, history, window, overhead)  # safety net; compaction comes first
+        effort = sm.effort if sm and model.supports_effort else None
+        return ModelContext(session, system, history, effort, window, used, ci, prefix)
+
+    async def _compact(self, session_id: int, turn_id: str, model: Model, provider, ctx: ModelContext,  # noqa: ANN001
+                       manual: bool = False) -> bool:
+        """Summarise the older part of this model's history (keeping ~30% of the window word for word) once it fills
+        ~80% of the context window; `manual` (/compact) keeps only the latest exchange. Returns False if there is
+        nothing to summarise or the request failed."""
+        messages = ctx.ci.messages
+        users = [m for m in messages if m.role == "user"]
+        if not users or not ctx.window:
+            return False
+        budget, kept, boundary = int(ctx.window * KEEP_RECENT), 0, None
+        for m in reversed(messages):
+            kept += len(m.content or "") // 4 + 4
+            if manual or kept > budget:
+                break
+            if m.role == "user":
+                boundary = m.id  # the kept part starts at a user message, so tool calls stay with their results
+        boundary = min(boundary or users[-1].id, users[-1].id)  # the current question always stays
+        older = [m for m in messages if m.id < boundary]
+        if not older:
+            return False
+        older_history = merge_users([*ctx.prefix, *build_messages(replace(ctx.ci, messages=older))])
+        transcript = transcript_for_summary(older_history, int(ctx.window * 0.7 * 4))
+        started = time.monotonic()
+        text: list[str] = []
+        usage: UsageEvent | None = None
+        try:
+            async for ev in provider.stream(model.model_name, SUMMARY_SYSTEM,
+                                            [ChatMessage("user", f"Conversation so far:\n\n{transcript}\n\nWrite the summary now.")], []):
+                if isinstance(ev, TextDelta):
+                    text.append(ev.text)
+                elif isinstance(ev, UsageEvent):
+                    usage = ev
+        except ProviderError as exc:
+            log.warning("compaction for %s failed: %s", model.display_name, exc)
+            return False
+        summary = "".join(text).strip()
+        if not summary:
+            return False
+        async with dbmod.sessionmaker()() as db:
+            session = await db.get(Session, session_id)
+            db.add(Compaction(session_id=session_id, model_id=model.id, before_message_id=boundary, summary=summary,
+                              tokens_before=ctx.used))
+            msg = Message(session_id=session_id, seq=await next_seq(db, session_id), turn_id=turn_id, role="summary",
+                          model_id=model.id, phase=session.phase, status="streaming",
+                          content=f"Context compacted: {len(older)} earlier messages (~{ctx.used:,} tokens of a "
+                                  f"{ctx.window:,}-token window) were summarised.")
+            db.add(msg)
+            await db.commit()
+        bus.publish(session_id, {"type": "message_start", "message": message_event(msg)})
+        await self._finish(session_id, msg, f"{msg.content}\n\n{summary}", [], "complete", usage, model, started, None)
+        return True
 
     async def _llm(self, session_id: int, turn_id: str, model: Model, endpoint: Endpoint, workspace: Workspace) -> None:
         provider = provider_for(endpoint)
@@ -249,6 +386,8 @@ class TurnManager:
             defaults = await runtime_defaults(db)
             web = await get_setting(db, "web")
             web_search_cfg = await get_setting(db, "web_search")
+
+        project_memory = await memory.project_files(workspace)  # CLAUDE.md / AGENTS.md / MULTICHAT.md, once per turn
 
         async def record_change(path: str, before: str | None, after: str | None) -> None:
             async with dbmod.sessionmaker()() as db:
@@ -263,7 +402,16 @@ class TurnManager:
                     if model.supports_tools
                     else []
                 )
-                session, system, history = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools, turn_id)
+                ctx = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools, turn_id,
+                                          tools, project_memory)
+            # at the start of this model's turn: compact when the history fills ~80% of its context window
+            if step == 0 and ctx.window and ctx.used > COMPACT_AT * ctx.window:
+                if await self._compact(session_id, turn_id, model, provider, ctx):
+                    async with dbmod.sessionmaker()() as db:
+                        ctx = await self._context(db, session_id, model, workspace, bool(tools) and workspace.supports_tools,
+                                                  turn_id, tools, project_memory)
+            session, system, history, effort = ctx.session, ctx.system, ctx.history, ctx.effort
+            async with dbmod.sessionmaker()() as db:
                 msg = Message(
                     session_id=session_id,
                     seq=await next_seq(db, session_id),
@@ -286,7 +434,7 @@ class TurnManager:
             ttft: int | None = None
             status = "complete"
             try:
-                async for ev in provider.stream(model.model_name, system, history, tools):
+                async for ev in provider.stream(model.model_name, system, history, tools, effort=effort):
                     if isinstance(ev, TextDelta):
                         if ttft is None:
                             ttft = int((time.monotonic() - started) * 1000)

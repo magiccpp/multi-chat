@@ -86,11 +86,12 @@ class Provider(ABC):
         system: str,
         messages: list[ChatMessage],
         tools: list[ToolSpec],
+        effort: str | None = None,  # low | medium | high | xhigh | max; None = the model's default
     ) -> AsyncIterator[StreamEvent]: ...
 
     async def list_models(self) -> list[dict[str, Any]]:
         """The vendor's catalog: [{"id", "name"?, "input_price"?, "output_price"?, "supports_images"?,
-        "supports_tools"?, "chat"?}]. Empty if the vendor has no listing."""
+        "supports_tools"?, "chat"?, "context_length"?, "supports_effort"?}]. Empty if the vendor has no listing."""
         return []
 
     async def check_key(self) -> None:

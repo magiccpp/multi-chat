@@ -129,3 +129,66 @@ async def test_anthropic_stream_text_tool_use_and_usage():
 def test_message_conversions_edge_cases():
     assert to_openai_messages("", [ChatMessage("assistant", "")])[0] == {"role": "assistant", "content": ""}
     assert to_anthropic_messages([ChatMessage("assistant", "")])[0]["content"] == [{"type": "text", "text": "(no content)"}]
+
+
+async def test_effort_is_sent_in_each_vendors_format():
+    bodies = []
+
+    def oa_handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=sse([openai_chunk({"content": "ok"}), "data: [DONE]\n\n"]),
+                              headers={"content-type": "text/event-stream"})
+
+    for base in ("https://openrouter.ai/api/v1", "https://api.openai.com/v1"):
+        p = OpenAICompatProvider(api_key="k", base_url=base)
+        p.client = AsyncOpenAI(api_key="k", base_url=base, http_client=httpx.AsyncClient(transport=httpx.MockTransport(oa_handler)))
+        _ = [e async for e in p.stream("m", "", [ChatMessage("user", "hi")], [], effort="xhigh")]
+    assert bodies[0]["reasoning"] == {"effort": "high"} and "reasoning_effort" not in bodies[0]  # OpenRouter
+    assert bodies[1]["reasoning_effort"] == "high" and "reasoning" not in bodies[1]  # OpenAI
+    p = OpenAICompatProvider(api_key="k", base_url="https://api.openai.com/v1")
+    p.client = AsyncOpenAI(api_key="k", base_url="https://api.openai.com/v1", http_client=httpx.AsyncClient(transport=httpx.MockTransport(oa_handler)))
+    _ = [e async for e in p.stream("m", "", [ChatMessage("user", "hi")], [])]
+    assert "reasoning_effort" not in bodies[2]  # default: nothing sent
+
+    seen = []
+
+    def an_handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(json.loads(request.content))
+        return httpx2.Response(200, content=sse([
+            anthropic_event("message_start", {"message": {"id": "m", "type": "message", "role": "assistant", "model": "m", "content": [],
+                                                          "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}}),
+            anthropic_event("message_delta", {"delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}}),
+            anthropic_event("message_stop", {}),
+        ]), headers={"content-type": "text/event-stream"})
+
+    p = AnthropicProvider(api_key="k", base_url=None)
+    p.client = AsyncAnthropic(api_key="k", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(an_handler)))
+    _ = [e async for e in p.stream("claude-opus-5-5", "", [ChatMessage("user", "hi")], [], effort="max")]
+    _ = [e async for e in p.stream("claude-opus-4-5", "", [ChatMessage("user", "hi")], [], effort="max")]
+    assert seen[0]["output_config"] == {"effort": "max"}
+    assert seen[1]["output_config"] == {"effort": "high"}  # Opus 4.5 tops out at high
+
+
+def test_fit_to_window_keeps_newest_and_tool_pairs():
+    from app.agent.context import fit_to_window
+
+    big = "x" * 8000  # ~2000 tokens
+    history = [
+        ChatMessage("user", "q1 " + big),
+        ChatMessage("assistant", "a1 " + big),
+        ChatMessage("user", "q2"),
+        ChatMessage("assistant", "", tool_calls=[ToolCall("c1", "read_file", {"path": "x"})]),
+        ChatMessage("tool", "result " + big, tool_call_id="c1"),
+        ChatMessage("assistant", "a2"),
+        ChatMessage("user", "q3"),
+    ]
+    kept, omitted = fit_to_window("system", history, 5000)  # 1250 reserved for the reply
+    assert omitted == 2  # q1 and a1 don't fit; the tool call and its big result stay together
+    assert kept[0].role == "user" and "2 earlier messages were left out" in kept[0].content and "q2" in kept[0].content
+    assert [m.role for m in kept[1:]] == ["assistant", "tool", "assistant", "user"]
+    kept, omitted = fit_to_window("system", history, 2500)  # now the tool call no longer fits either
+    assert omitted == 5 and [m.role for m in kept] == ["user", "assistant", "user"]
+    assert fit_to_window("system", history, 1_000_000) == (history, 0)
+    # the newest exchange is kept even when it alone is too big
+    kept, omitted = fit_to_window("system", [ChatMessage("user", big * 10)], 4096)
+    assert omitted == 0 and len(kept) == 1

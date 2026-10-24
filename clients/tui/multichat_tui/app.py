@@ -20,9 +20,9 @@ from textual.widgets import Static, Tab, Tabs
 from multichat_client.client import ApiError, MultiChatClient
 from multichat_client.config import ClientConfig
 from multichat_client.runner.agent import Runner
-from multichat_client.state import SessionState
+from multichat_client.state import EFFORTS, SessionState, context_choices, window_label
 from multichat_tui import commands as cmds
-from multichat_tui.render import cost_table, money, tokens, usage_text
+from multichat_tui.render import context_table, cost_table, money, tokens, usage_text
 from multichat_tui.screens import (
     ApprovalScreen,
     ModelsScreen,
@@ -374,6 +374,10 @@ class MultiChatApp(App):
             u = self.st.usage.get(p["model_id"])
             t.append("● ", style=p["color"])
             t.append(p["display_name"])
+            extras = [window_label(p.get("context_window") or p.get("context_length"))]
+            if p.get("effort"):
+                extras.append(f"effort {p['effort']}")
+            t.append(f"  {' · '.join(x for x in extras if x != 'default')}", style="dim")
             if self.st.session.get("builder_model_id") == p["model_id"]:
                 t.append(" ★", style="yellow")
             if u:
@@ -584,6 +588,14 @@ class MultiChatApp(App):
     @on(PromptArea.Submitted)
     async def submitted(self, event: PromptArea.Submitted) -> None:
         self.query_one("#suggest", Static).remove_class("visible")
+        if event.text.startswith("#") and not event.text.startswith("##"):
+            # like Claude Code: "# always use tabs" goes into memory instead of to the models
+            try:
+                await self.client.remember(event.text)
+                self.notify("Saved to memory: " + event.text.lstrip("# "))
+            except ApiError as exc:
+                self.notify(exc.detail, severity="error")
+            return
         parsed = cmds.parse(event.text)
         if parsed:
             await self.run_command(*parsed)
@@ -643,7 +655,7 @@ class MultiChatApp(App):
                 self.exit()
             elif name == "help":
                 self.push_screen(TextScreen("MultiChat — keys and commands", help_body()))
-            elif name == "new":
+            elif name == "new" or name == "clear":
                 if self.st.is_empty:
                     self.notify("This session is still empty — type a message to start it.")
                     return
@@ -657,7 +669,22 @@ class MultiChatApp(App):
                     await self.run_command("models", [])
             elif name == "attach":
                 self.attach(args)
-            elif name == "sessions":
+            elif name in ("effort", "window"):
+                await self.model_setting(name, args)
+            elif name == "context":
+                self.push_screen(TextScreen("Context windows", context_table(await c.context_usage(sid))))
+            elif name == "compact":
+                self.notify("compacting…")
+                results = await c.compact(sid)
+                self.notify(f"compacted {sum(r['compacted'] for r in results)} of {len(results)} models")
+            elif name == "memory":
+                if args[:1] == ["clear"]:
+                    await c.set_memory("")
+                data = await c.memory()
+                body = Text(data["text"] or "(empty)")
+                body.append(f"\n\nAdd a line: '# text'.  Project memory: {', '.join(data['project_files'])} in the folder.", style="dim")
+                self.push_screen(TextScreen("Memory (every model, every session)", body))
+            elif name in ("sessions", "resume"):
                 sessions = await c.sessions()
 
                 async def chosen(session_id: int | None) -> None:
@@ -746,6 +773,35 @@ class MultiChatApp(App):
             self.notify(exc.detail, severity="error", timeout=8)
         self.update_header()
         self.update_sidebar()
+
+    async def model_setting(self, name: str, args: list[str]) -> None:
+        if len(args) < 2:
+            self.notify(cmds.BY_NAME[name].usage, severity="warning")
+            return
+        who, value = " ".join(args[:-1]), args[-1].lower()
+        targets = self.st.participants if who == "all" else [p for p in [self._model(who)] if p]
+        for p in targets:
+            mid = p.get("model_id", p.get("id"))
+            part = self.st.participant(mid) or {}
+            if name == "effort":
+                if value not in EFFORTS + ["default"]:
+                    self.notify("effort: low, medium, high, xhigh, max or default", severity="warning")
+                    return
+                if not part.get("supports_effort"):
+                    self.notify(f"{part.get('display_name', mid)} has no effort setting", severity="warning")
+                    continue
+                self.st.session = await self.client.update_model_settings(self.st.session_id, mid, effort=None if value == "default" else value)
+            else:
+                choices = context_choices(part.get("context_length"))
+                wanted = {"256k": 256_000, "max": choices[-1] if choices else None}.get(value)
+                if len(choices) < 2 or wanted is None:
+                    self.notify(f"{part.get('display_name', mid)}: " + (
+                        f"uses its maximum, {window_label(choices[0])} ({choices[0]:,} tokens); a choice exists only above 512K"
+                        if choices else "context window unknown") if choices or wanted else "context: 256k or max", severity="warning")
+                    continue
+                self.st.session = await self.client.update_model_settings(self.st.session_id, mid, context_window=min(wanted, choices[-1]))
+        self.update_sidebar()
+        self.rebuild_tabs()
 
     async def vote_command(self, args: list[str]) -> None:
         values = {"up": 1, "+": 1, "down": -1, "-": -1, "clear": 0, "0": 0}

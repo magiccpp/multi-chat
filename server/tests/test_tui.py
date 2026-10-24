@@ -135,6 +135,7 @@ async def test_tui_models_new_session_and_attach(server, client, tmp_path):
     from multichat_tui import cli
     from multichat_tui.screens import ModelsScreen
 
+    await client.post("/api/endpoints/check")  # demo models: context length and effort support
     ep = (await client.post("/api/endpoints", json={"name": "tui-nokey", "kind": "openai_compatible",
                                                     "base_url": "https://api.example.com/v1"})).json()
     gone = (await client.post("/api/models", json={"endpoint_id": ep["id"], "model_name": "needs-key", "display_name": "Needs key"})).json()
@@ -162,6 +163,11 @@ async def test_tui_models_new_session_and_attach(server, client, tmp_path):
         assert [lst.get_option_at_index(i).value for i in range(lst.option_count)] == [models["mock-beta"]["id"]]
         await pilot.press("escape")
 
+        # effort per model (any time); the sidebar shows the model's context window and effort
+        await send(pilot, app, "/effort Alpha high")
+        await until(pilot, lambda: (app.st.participant(models["mock-alpha"]["id"]) or {}).get("effort") == "high")
+        assert "effort high" in str(app.query_one("#side-participants").render())
+
         # /new while the session is empty is ignored
         await send(pilot, app, "/new")
         await pilot.pause(0.2)
@@ -177,8 +183,27 @@ async def test_tui_models_new_session_and_attach(server, client, tmp_path):
         assert [a["filename"] for a in user.attachments] == ["spec.md", "screen.png"]
         reply = next(m for m in app.st.ordered() if m.role == "assistant")
         assert "(I see 1 image.)" in reply.content and "spec.md" in reply.content
+        assert "(effort: high)" in reply.content
         await pilot.pause(0.2)
         app.save_screenshot(str(SHOTS / "tui-attachments.svg"))
+
+        # Claude Code-style memory and session commands
+        await client.put("/api/memory", json={"text": ""})
+        await send(pilot, app, "# deploy target is nuc2")
+        await pilot.pause(0.3)
+        assert (await client.get("/api/memory")).json()["text"] == "- deploy target is nuc2"
+        await send(pilot, app, "/memory")
+        await until(pilot, lambda: isinstance(app.screen, TextScreen))
+        await pilot.press("escape")
+        await send(pilot, app, "Follow-up")
+        await until(pilot, lambda: not app.st.busy and len([m for m in app.st.messages.values() if m.role == "assistant"]) == 2)
+        assert "(memory: 1 items)" in [m for m in app.st.ordered() if m.role == "assistant"][-1].content
+        await send(pilot, app, "/context")
+        await until(pilot, lambda: isinstance(app.screen, TextScreen))
+        await pilot.press("escape")
+        await send(pilot, app, "/compact")
+        await until(pilot, lambda: any(m.role == "summary" for m in app.st.messages.values()))
+        await client.put("/api/memory", json={"text": ""})
 
         # with messages in it, /new creates a session; a second /new right away is ignored
         await send(pilot, app, "/new")

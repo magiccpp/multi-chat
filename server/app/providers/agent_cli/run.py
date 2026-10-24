@@ -7,7 +7,7 @@ import time
 
 from sqlalchemy import select
 
-from app import crypto
+from app import crypto, memory
 from app import db as dbmod
 from app.agent.context import ContextInput, WorkspaceView, build_messages, system_prompt
 from app.agent.events import bus
@@ -99,6 +99,7 @@ async def run_agent_cli_turn(session_id: int, turn_id: str, model: Model, endpoi
             attachments=await load_attachments(db, subset),
             supports_images=False,  # CLI prompts are text; images are mentioned by name
             turn_id=turn_id,
+            memory=await memory.load(db),  # the CLI reads the folder's own CLAUDE.md / AGENTS.md itself
         )
         history = [m for m in build_messages(ci) if not (resume_id and m.role == "assistant")]
         if resume_id:

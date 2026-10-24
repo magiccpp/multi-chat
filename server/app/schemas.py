@@ -82,6 +82,8 @@ class ModelOut(ORM):
     source: str
     available: bool = True
     availability_detail: str = ""
+    context_length: int | None = None
+    supports_effort: bool = False
 
 
 # ---- ssh ------------------------------------------------------------------
@@ -152,12 +154,32 @@ class WorkspaceIn(BaseModel):
     path: str | None = None
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+
+class ModelSettingsIn(BaseModel):
+    """Per model in a session. context_window: tokens of history it gets (None = the model's maximum); can only be
+    chosen while the session has no messages. effort: reasoning effort (None = the model's default)."""
+
+    context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
+    effort: Effort | None = None
+
+
+class ModelSettingsPatch(BaseModel):
+    context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
+    effort: Effort | None = None
+    # which fields were sent (None is a valid value: back to the default)
+    model_config = {"extra": "forbid"}
+
+
 class SessionIn(BaseModel):
     reuse_empty: bool = False  # return (and update) the latest session instead, if it has no messages yet
     title: str = "New session"
     context_mode: Literal["shared", "isolated", "relay"] = "isolated"
     model_ids: list[int] = Field(default_factory=list)
     workspace: WorkspaceIn = Field(default_factory=WorkspaceIn)
+    model_settings: dict[int, ModelSettingsIn] = Field(default_factory=dict)  # model id -> settings
 
 
 class SessionPatch(BaseModel):
@@ -175,6 +197,10 @@ class ParticipantOut(BaseModel):
     color: str
     endpoint_kind: str
     position: int
+    context_window: int | None = None  # chosen window, None = model maximum
+    context_length: int | None = None  # the model's maximum, if known
+    effort: str | None = None
+    supports_effort: bool = False
 
 
 class SessionOut(ORM):

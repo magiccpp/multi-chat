@@ -53,7 +53,11 @@ struct MessageRow: View {
     private func header(color: Color) -> some View {
         HStack(spacing: 6) {
             Text("#\(message.seq)").font(.caption).foregroundStyle(.secondary)
-            if message.isReply {
+            if message.isSummary {
+                Label(state.name(message.modelId), systemImage: "rectangle.compress.vertical").font(.subheadline.bold())
+                    .foregroundStyle(Color(hex: state.color(message.modelId)))
+                Text("context compacted").font(.caption).foregroundStyle(.secondary)
+            } else if message.isReply {
                 Text("● \(state.name(message.modelId))").font(.subheadline.bold()).foregroundStyle(color)
                 if message.phase == "build" { PhaseBadge(build: true) }
             } else {

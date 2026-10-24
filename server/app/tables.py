@@ -66,6 +66,9 @@ class Model(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_tools: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_images: Mapped[bool] = mapped_column(Boolean, default=True)
+    # From the vendor catalogs (OpenRouter, Anthropic) where known.
+    context_length: Mapped[int | None] = mapped_column(Integer)  # max input tokens
+    supports_effort: Mapped[bool] = mapped_column(Boolean, default=False)  # reasoning effort can be set
     source: Mapped[str] = mapped_column(String(16), default="api")  # config | api | catalog
     # Set by the endpoint check: can this model be used right now, and if not, why.
     available: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -134,6 +137,25 @@ class SessionModel(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     joined_at: Mapped[datetime] = _now()
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Per model in this session: how much history it gets (fixed once the session has messages) and its
+    # reasoning effort (low ... max, changeable any time). None = the model's default.
+    context_window: Mapped[int | None] = mapped_column(Integer)
+    effort: Mapped[str | None] = mapped_column(String(16))
+
+
+class Compaction(Base):
+    """A model's summary of the conversation before `before_message_id`, written when its context window was
+    about 80% full; from then on the model gets the summary instead of those messages."""
+
+    __tablename__ = "compactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    model_id: Mapped[int] = mapped_column(ForeignKey("models.id", ondelete="CASCADE"))
+    before_message_id: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[str] = mapped_column(Text)
+    tokens_before: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = _now()
 
 
 class Message(Base):

@@ -27,6 +27,9 @@ from app.providers.base import (
 
 
 # Vendor model ids that are not chat models (embeddings, speech, images, moderation, legacy completions).
+# MultiChat's levels -> what OpenAI-style APIs accept (the top two map to "high").
+EFFORT_LEVELS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
+OPENAI_REASONING = re.compile(r"^(o[1-9]|gpt-5)", re.I)  # OpenAI models that take reasoning_effort
 NON_CHAT = re.compile(r"embed|tts|whisper|dall-e|moderation|transcribe|audio|realtime|image|davinci|babbage|search", re.I)
 
 
@@ -87,7 +90,7 @@ class OpenAICompatProvider(Provider):
         return "openrouter.ai" in (self.base_url or "")
 
     async def stream(
-        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec]
+        self, model: str, system: str, messages: list[ChatMessage], tools: list[ToolSpec], effort: str | None = None
     ) -> AsyncIterator[StreamEvent]:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -99,6 +102,12 @@ class OpenAICompatProvider(Provider):
             kwargs["tools"] = to_openai_tools(tools)
         if self.is_openrouter:
             kwargs["extra_body"] = {"usage": {"include": True}}
+        if effort:
+            level = EFFORT_LEVELS.get(effort, "medium")
+            if self.is_openrouter:  # OpenRouter's unified reasoning parameter, mapped per model by OpenRouter
+                kwargs["extra_body"]["reasoning"] = {"effort": level}
+            else:
+                kwargs["reasoning_effort"] = level
         try:
             stream = await self.client.chat.completions.create(**kwargs)
         except openai.BadRequestError as exc:
@@ -180,7 +189,14 @@ class OpenAICompatProvider(Provider):
                 item["chat"] = "text" in (arch.get("output_modalities") or ["text"])
                 item["supports_images"] = "image" in (arch.get("input_modalities") or [])
             if "supported_parameters" in extra:
-                item["supports_tools"] = "tools" in (extra.get("supported_parameters") or [])
+                params = extra.get("supported_parameters") or []
+                item["supports_tools"] = "tools" in params
+                item["supports_effort"] = "reasoning" in params
+            elif OPENAI_REASONING.match(m.id):
+                item["supports_effort"] = True
+            ctx = extra.get("context_length") or (extra.get("top_provider") or {}).get("context_length")
+            if isinstance(ctx, int) and ctx > 0:
+                item["context_length"] = ctx
             result.append(item)
         return result
 

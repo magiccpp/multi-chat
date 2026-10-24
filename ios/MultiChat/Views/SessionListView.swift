@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(AppModel.self) private var app
     @State private var showNew = false
+    @State private var showMemory = false
     @State private var path: [Int] = []
 
     init() {}
@@ -33,7 +34,11 @@ struct SessionListView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
             }
+            ToolbarItem(placement: .secondaryAction) {
+                Button { showMemory = true } label: { Label("Memory", systemImage: "brain") }
+            }
         }
+        .sheet(isPresented: $showMemory) { MemorySheet() }
         .sheet(isPresented: $showNew) {
             NewSessionSheet { session in
                 showNew = false
@@ -90,6 +95,7 @@ struct NewSessionSheet: View {
     @State private var selected: Set<Int> = []
     @State private var shared = false
     @State private var query = ""
+    @State private var largeContext = false  // the model's maximum instead of 256K, for models over 512K
 
     var body: some View {
         NavigationStack {
@@ -100,6 +106,23 @@ struct NewSessionSheet: View {
                 } footer: {
                     Text(shared ? "Shared: models answer in parallel and see each other's earlier replies (Relay, in the session menu, makes them take turns)."
                                 : "Isolated: models answer independently, in parallel.")
+                }
+                let big = app.models.filter { selected.contains($0.id) && $0.contextChoices.count > 1 }
+                if !big.isEmpty {
+                    Section {
+                        Picker("Context window", selection: $largeContext) {
+                            Text("256K").tag(false)
+                            Text("Max").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        ForEach(big) { m in
+                            LabeledContent(m.displayName, value: largeContext
+                                ? "\(contextLabel(m.contextLength)) (\((m.contextLength ?? 0).formatted()) tokens)" : "256K")
+                                .font(.caption)
+                        }
+                    } footer: {
+                        Text("For models over 512K. Other models use their maximum. Chosen now; it can't be changed later in this session.")
+                    }
                 }
                 ModelPicker(models: app.models, selected: $selected, query: query)
             }
@@ -113,8 +136,12 @@ struct NewSessionSheet: View {
                     Button("Start") {
                         Task {
                             let ordered = app.models.map(\.id).filter { selected.contains($0) }
+                            var windows: [Int: Int] = [:]
+                            for m in app.models where selected.contains(m.id) && m.contextChoices.count > 1 {
+                                windows[m.id] = largeContext ? m.contextChoices[1] : m.contextChoices[0]
+                            }
                             let s = await app.newSession(title: title.isEmpty ? "New session" : title, modelIds: ordered,
-                                                         contextMode: shared ? "shared" : "isolated")
+                                                         contextMode: shared ? "shared" : "isolated", contextWindows: windows)
                             done(s)
                         }
                     }
@@ -179,5 +206,50 @@ struct ModelPicker: View {
             }
         }
         .disabled(!usable)
+    }
+}
+
+/// The global memory every model gets in every session (like Claude Code's CLAUDE.md).
+struct MemorySheet: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var loaded = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $text).frame(minHeight: 220).font(.callout.monospaced())
+                } footer: {
+                    Text("Every model gets this in every session. In the desktop app and the terminal, a message starting with # is saved here. A CLAUDE.md, AGENTS.md or MULTICHAT.md in a session's folder is read too.")
+                }
+                if let error { Section { Text(error).foregroundStyle(.red) } }
+            }
+            .navigationTitle("Memory")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            do {
+                                _ = try await app.api?.setMemory(text)
+                                dismiss()
+                            } catch {
+                                self.error = error.localizedDescription
+                            }
+                        }
+                    }
+                    .disabled(!loaded)
+                }
+            }
+            .task {
+                guard !loaded, let api = app.api else { return }
+                text = (try? await api.memory().text) ?? ""
+                loaded = true
+            }
+        }
     }
 }

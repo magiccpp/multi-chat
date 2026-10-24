@@ -159,3 +159,96 @@ async def test_session_and_message_costs(client):
     assert all(m["usage"] and m["usage"]["cost"] > 0 for m in replies)
     assert abs(sum(m["usage"]["cost"] for m in replies) - total) < 1e-9
     assert next(m for m in messages if m["role"] == "user")["usage"] is None
+
+
+async def test_effort_and_context_window_per_model(client):
+    await client.post("/api/endpoints/check")  # sets the demo models' context length and effort support
+    models = await models_by_name(client)
+    a, b = models["mock-alpha"]["id"], models["mock-beta"]["id"]
+    assert models["mock-alpha"]["context_length"] == 128_000 and models["mock-alpha"]["supports_effort"]
+    s = (await client.post("/api/sessions", json={
+        "title": "settings", "model_ids": [a, b],
+        "model_settings": {str(a): {"effort": "high", "context_window": 32_000}},
+    })).json()
+    parts = {p["model_id"]: p for p in s["participants"]}
+    assert (parts[a]["effort"], parts[a]["context_window"], parts[a]["context_length"]) == ("high", 32_000, 128_000)
+    assert (parts[b]["effort"], parts[b]["context_window"]) == (None, None)
+    # too big for the model
+    r = await client.patch(f"/api/sessions/{s['id']}/models/{b}", json={"context_window": 500_000})
+    assert r.status_code == 422 and "at most 128,000" in r.json()["detail"]
+    # still empty: the context window can be changed
+    r = await client.patch(f"/api/sessions/{s['id']}/models/{b}", json={"context_window": 64_000})
+    assert r.status_code == 200
+
+    replies = {m["model_id"]: m for m in finished(await chat(client, s["id"], "Plan it"))}
+    assert "(effort: high)" in replies[a]["content"] and "effort" not in replies[b]["content"]
+
+    # effort changes mid-session; the context window is fixed now
+    r = await client.patch(f"/api/sessions/{s['id']}/models/{a}", json={"effort": "low"})
+    assert r.status_code == 200
+    r = await client.patch(f"/api/sessions/{s['id']}/models/{a}", json={"context_window": 64_000})
+    assert r.status_code == 409 and "can't be changed" in r.json()["detail"]
+    r = await client.patch(f"/api/sessions/{s['id']}/models/{b}", json={"effort": None})  # back to default: fine
+    assert r.status_code == 200
+    replies = {m["model_id"]: m for m in finished(await chat(client, s["id"], "And now?"))}
+    assert "(effort: low)" in replies[a]["content"]
+
+
+async def test_compaction_at_80_percent_of_the_context_window(client):
+    await client.post("/api/endpoints/check")
+    a = (await models_by_name(client))["mock-gamma"]["id"]
+    s = (await client.post("/api/sessions", json={"title": "window", "model_ids": [a],
+                                                  "model_settings": {str(a): {"context_window": 4096}}})).json()
+    long = "details " * 800  # ~1600 tokens per message
+    first = finished(await chat(client, s["id"], "first " + long))[0]
+    assert "summary" not in first["content"]
+    # the second long message takes the history past 80% of 4096 tokens: the older part is summarised first
+    events = await chat(client, s["id"], "second " + long)
+    done = finished(events)
+    summary = next(m for m in done if m["role"] == "summary")
+    reply = next(m for m in done if m["role"] == "assistant")
+    assert summary["content"].startswith("Context compacted: 2 earlier messages") and "Summary:" in summary["content"]
+    assert "(working from a summary)" in reply["content"] and "left out" not in reply["content"]
+    usage = (await client.get(f"/api/sessions/{s['id']}/usage")).json()[0]
+    assert usage["replies"] == 3  # two replies + the summarising request, all billed to the model
+    messages = (await client.get(f"/api/sessions/{s['id']}/messages")).json()
+    assert [m["role"] for m in messages] == ["user", "assistant", "user", "summary", "assistant"]
+    # the summary stays in use on the next turn
+    third = finished(await chat(client, s["id"], "third, short"))
+    assert "(working from a summary)" in next(m for m in third if m["role"] == "assistant")["content"]
+
+
+async def test_memory_reaches_every_model(client):
+    await client.put("/api/memory", json={"text": ""})
+    r = (await client.post("/api/memory/append", json={"text": "# Always answer in British English"})).json()
+    assert r["text"] == "- Always answer in British English"
+    r = (await client.post("/api/memory/append", json={"text": "The prod host is nuc2"})).json()
+    assert r["text"].splitlines() == ["- Always answer in British English", "- The prod host is nuc2"]
+    assert (await client.get("/api/memory")).json()["text"] == r["text"]
+    models = await models_by_name(client)
+    s = (await client.post("/api/sessions", json={"title": "memory", "model_ids": [models["mock-alpha"]["id"], models["mock-beta"]["id"]]})).json()
+    replies = finished(await chat(client, s["id"], "hello"))
+    assert all("(memory: 2 items)" in r["content"] for r in replies)
+    await client.put("/api/memory", json={"text": ""})
+    replies = finished(await chat(client, s["id"], "again"))
+    assert all("memory:" not in r["content"] for r in replies)
+
+
+async def test_context_report_and_manual_compact(client):
+    await client.post("/api/endpoints/check")
+    a = (await models_by_name(client))["mock-alpha"]["id"]
+    s = (await client.post("/api/sessions", json={"title": "ctx", "model_ids": [a],
+                                                  "model_settings": {str(a): {"context_window": 64_000}}})).json()
+    await chat(client, s["id"], "one " + "words " * 400)
+    await chat(client, s["id"], "two " + "words " * 400)
+    report = (await client.get(f"/api/sessions/{s['id']}/context")).json()[0]
+    assert report["window"] == 64_000 and 0 < report["percent"] < 80 and report["compactions"] == 0
+    before = report["used"]
+    result = (await client.post(f"/api/sessions/{s['id']}/compact", json={})).json()
+    assert result == [{"model_id": a, "display_name": "Alpha", "compacted": True}]
+    report = (await client.get(f"/api/sessions/{s['id']}/context")).json()[0]
+    assert report["compactions"] == 1 and report["used"] < before
+    roles = [m["role"] for m in (await client.get(f"/api/sessions/{s['id']}/messages")).json()]
+    assert roles[-1] == "summary"
+    reply = finished(await chat(client, s["id"], "three"))[0]
+    assert "(working from a summary)" in reply["content"]

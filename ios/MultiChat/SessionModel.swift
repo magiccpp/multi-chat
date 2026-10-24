@@ -161,6 +161,14 @@ final class SessionModel {
         run { self.updateSession(try await self.api.updateSession(self.sessionId, ["title": .string(title)])) }
     }
 
+    func compact() {
+        run { try await self.api.compact(self.sessionId) }
+    }
+
+    func setEffort(_ modelId: Int, _ effort: String?) {
+        run { self.updateSession(try await self.api.setEffort(self.sessionId, modelId: modelId, effort: effort)) }
+    }
+
     func setModels(_ ids: [Int]) {
         run { self.updateSession(try await self.api.setModels(self.sessionId, modelIds: ids)) }
     }

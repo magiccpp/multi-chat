@@ -261,6 +261,32 @@ def test_availability_new_session_and_attachments(server, tmp_path, monkeypatch)
         win.show()
         await ctl.open_session(s["id"])
 
+        # effort and context window per model: chosen in the models dialog while the session is still empty
+        await api.check_endpoints()
+        await ctl.refresh_models()
+        dlg = ModelsDialog(ctl, win, title="Models for the new session")
+        alpha_item = next(item for _, item in dlg._items() if item.data(0, Qt.ItemDataRole.UserRole) == models["mock-alpha"]["id"])
+        ctx_box, eff_box = dlg.tree.itemWidget(alpha_item, 3), dlg.tree.itemWidget(alpha_item, 4)
+        # the mock models top out at 128K: nothing to choose
+        assert not ctx_box.isEnabled() and [ctx_box.itemText(i) for i in range(ctx_box.count())] == ["Max: 128K (128,000 tokens)"]
+        eff_box.setCurrentIndex(eff_box.findData("high"))
+        dlg._save()
+        # a model with more than 512K offers 256K (the default for a new session) or its maximum
+        beta = next(m for m in ctl.models if m["model_name"] == "mock-beta")
+        beta["context_length"] = 1_000_000
+        big = ModelsDialog(ctl, win, title="Models for the new session")
+        beta_item = next(item for _, item in big._items() if item.data(0, Qt.ItemDataRole.UserRole) == beta["id"])
+        beta_item.setCheckState(0, Qt.CheckState.Checked)
+        box = big.tree.itemWidget(beta_item, 3)
+        assert box.isEnabled() and [box.itemText(i) for i in range(box.count())] == ["256K", "Max: 1M (1,000,000 tokens)"]
+        assert box.currentData() == 256_000 and big.settings[beta["id"]]["context_window"] == 256_000
+        box.setCurrentIndex(1)
+        assert big.settings[beta["id"]]["context_window"] == 1_000_000
+        big.reject()
+        beta["context_length"] = 128_000
+        await until(lambda: (ctl.st.participant(models["mock-alpha"]["id"]) or {}).get("effort") == "high")
+        assert "Effort: High" in win.chat.tabs.tabToolTip(1)
+
         # the unavailable model is greyed out and can't be ticked; search filters the list
         dlg = ModelsDialog(ctl, win)
         items = {item.data(0, Qt.ItemDataRole.UserRole): item for _, item in dlg._items()}
@@ -315,11 +341,46 @@ def test_availability_new_session_and_attachments(server, tmp_path, monkeypatch)
         assert [a["kind"] for a in user.attachments] == ["image", "document"]
         reply = next(m for m in ctl.st.ordered() if m.role == "assistant")
         assert "(I see 1 image.)" in reply.content and "notes.md" in reply.content
+        assert "(effort: high)" in reply.content
+        # after the first message the context window is fixed; effort still changes
+        dlg = ModelsDialog(ctl, win)
+        alpha_item = next(item for _, item in dlg._items() if item.data(0, Qt.ItemDataRole.UserRole) == models["mock-alpha"]["id"])
+        assert not dlg.tree.itemWidget(alpha_item, 3).isEnabled() and dlg.tree.itemWidget(alpha_item, 4).isEnabled()
+        dlg.reject()
         view = win.chat.cards[user.id].attachments
         assert isinstance(view, AttachmentView)
         await until(lambda: user.attachments[0]["id"] in ctl.attachment_cache)
         await asyncio.sleep(0.3)
         win.grab().save(str(SHOTS / "desktop-attachments.png"))
+
+        # "# ..." goes into memory instead of to the models; the Memory dialog shows it
+        await api.set_memory("")
+        win.chat.composer.setPlainText("# the prod host is nuc2")
+        win.chat._send_clicked()
+        await asyncio.sleep(0.5)
+        assert (await api.memory())["text"] == "- the prod host is nuc2"
+        assert not any("nuc2" in m.content for m in ctl.st.messages.values())  # not sent
+        win.open_memory()
+        await until(lambda: getattr(win, "memory_dialog", None) is not None)
+        assert "nuc2" in win.memory_dialog.text.toPlainText()
+        win.memory_dialog.text.setPlainText("")
+        win.memory_dialog._save()
+        await asyncio.sleep(0.3)
+        assert (await api.memory())["text"] == ""
+
+        # Context…: per-model usage, Compact now adds a "context compacted" card
+        ctl.send("A follow-up question")
+        await until(lambda: not ctl.st.busy and len([m for m in ctl.st.messages.values() if m.role == "assistant"]) == 2)
+        win.chat.show_context()
+        await until(lambda: getattr(win.chat, "context_dialog", None) is not None)
+        table = win.chat.context_dialog.table
+        assert table.rowCount() == 1 and table.item(0, 2).text() == "128K" and table.item(0, 4).text() == "0"
+        win.chat.context_dialog._compact()
+        await until(lambda: any(m.role == "summary" for m in ctl.st.messages.values()))
+        await asyncio.sleep(0.3)
+        summary = next(m for m in ctl.st.messages.values() if m.role == "summary")
+        assert "context compacted" in win.chat.cards[summary.id].title.text()
+        win.grab().save(str(SHOTS / "desktop-compacted.png"))
 
         # the sessions list shows what each session cost
         win._left_page(1)

@@ -15,7 +15,7 @@ log = logging.getLogger("multichat.pricing")
 
 CATALOG_URL = "https://openrouter.ai/api/v1/models"  # public, no key needed
 CACHE_SECONDS = 6 * 3600
-_cache: tuple[float, dict[str, tuple[float, float]]] | None = None
+_cache: tuple[float, dict[str, tuple[float, float]], dict[str, int]] | None = None
 
 # (substring of the endpoint's base URL or kind, OpenRouter id prefix)
 VENDORS = [
@@ -56,16 +56,20 @@ def vendor_prefix(kind: str, base_url: str | None) -> str | None:
     return None
 
 
-async def openrouter_prices() -> dict[str, tuple[float, float]]:
-    """normalised OpenRouter id -> (input, output) USD per 1M tokens; cached; empty if unreachable."""
+async def _catalog() -> tuple[dict[str, tuple[float, float]], dict[str, int]]:
+    """OpenRouter's public model list: normalised id -> (input, output) USD per 1M tokens, and -> context length.
+    Cached; empty if unreachable."""
     global _cache
     if _cache and time.monotonic() - _cache[0] < CACHE_SECONDS:
-        return _cache[1]
+        return _cache[1], _cache[2]
     prices: dict[str, tuple[float, float]] = {}
+    contexts: dict[str, int] = {}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             data = (await client.get(CATALOG_URL)).raise_for_status().json().get("data", [])
         for item in data:
+            if isinstance(item.get("context_length"), int):
+                contexts.setdefault(_norm(item["id"]), item["context_length"])
             p = item.get("pricing") or {}
             try:
                 inp, out = float(p.get("prompt") or 0) * 1_000_000, float(p.get("completion") or 0) * 1_000_000
@@ -75,11 +79,20 @@ async def openrouter_prices() -> dict[str, tuple[float, float]]:
                 prices.setdefault(_norm(item["id"]), (round(inp, 6), round(out, 6)))
     except (httpx.HTTPError, ValueError) as exc:
         log.info("OpenRouter price list unavailable: %s", exc)
-    _cache = (time.monotonic(), prices) if prices else _cache
-    return prices
+    if prices:
+        _cache = (time.monotonic(), prices, contexts)
+    return prices, contexts
 
 
-def lookup(prices: dict[str, tuple[float, float]], prefix: str, model_name: str) -> tuple[float, float] | None:
+async def openrouter_prices() -> dict[str, tuple[float, float]]:
+    return (await _catalog())[0]
+
+
+async def openrouter_contexts() -> dict[str, int]:
+    return (await _catalog())[1]
+
+
+def lookup(prices: dict, prefix: str, model_name: str):  # noqa: ANN201 - prices or context lengths
     for candidate in (prefix + model_name, model_name, prefix + model_name.split("/")[-1]):
         hit = prices.get(_norm(candidate))
         if hit:

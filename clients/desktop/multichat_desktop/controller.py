@@ -23,6 +23,7 @@ class Controller(QObject):
     runner_status = Signal(str, str)
     models_changed = Signal()
     error = Signal(str)
+    notice = Signal(str)  # plain status-bar messages
 
     def __init__(self, client: MultiChatClient) -> None:
         super().__init__()

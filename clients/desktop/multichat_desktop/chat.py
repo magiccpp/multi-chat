@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from multichat_client.state import MessageView
+from multichat_client.state import EFFORT_LABELS, EFFORTS, MessageView, window_label
 from multichat_desktop import attachments as att_mod
 from multichat_desktop.attachments import AttachmentView, PendingAttachment, PendingChip
 from multichat_desktop.controller import Controller
@@ -132,6 +133,9 @@ class MessageCard(QFrame):
         name = "You" if m.role == "user" else html.escape(st.name(m.model_id))
         color = c["text"] if m.role == "user" else st.color(m.model_id)
         title = f'<span style="color:{c["muted"]}">#{m.seq}</span> <b style="color:{color}">{"● " if is_reply else ""}{name}</b>'
+        if m.role == "summary":
+            title = (f'<span style="color:{c["muted"]}">#{m.seq} 🗜</span> <b style="color:{color}">{name}</b> '
+                     f'<span style="color:{c["muted"]}">context compacted</span>')
         if m.role == "user" and m.recipients and len(m.recipients) < len(st.participants):
             title += f' <span style="color:{c["muted"]}">→ {html.escape(", ".join(st.name(r) for r in m.recipients))}</span>'
         if m.phase == "build" and is_reply:
@@ -198,6 +202,7 @@ class CostBar(QFrame):
 
     model_clicked = Signal(object)
     details_clicked = Signal()
+    context_clicked = Signal()
 
     def __init__(self, ctl: Controller) -> None:
         super().__init__()
@@ -242,6 +247,12 @@ class CostBar(QFrame):
         total.setTextFormat(Qt.TextFormat.RichText)
         total.setToolTip("Total for this session, all models")
         self.row.addWidget(total)
+        context = QToolButton()
+        context.setObjectName("costchip")
+        context.setText("Context…")
+        context.setToolTip("How full each model's context window is; compact now")
+        context.clicked.connect(self.context_clicked.emit)
+        self.row.addWidget(context)
         details = QToolButton()
         details.setObjectName("costchip")
         details.setText("Details…")
@@ -311,6 +322,61 @@ class CostDetailsDialog(QDialog):
         note.setObjectName("muted")
         layout.addWidget(note)
         self.table = table
+
+
+class ContextDialog(QDialog):
+    """How full each model's context window is (like Claude Code's /context), with Compact now."""
+
+    COLS = ["Model", "Used (est.)", "Window", "Full", "Compactions", ""]
+
+    def __init__(self, ctl: Controller, rows: list[dict], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.ctl = ctl
+        self.setWindowTitle("Context windows")
+        self.resize(760, 140 + 34 * len(rows))
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(len(rows), len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for r, row in enumerate(rows):
+            pct = row.get("percent")
+            values = [row["display_name"], f"{row['used']:,}" if row.get("used") is not None else "—",
+                      window_label(row.get("window")) if row.get("window") else "—",
+                      f"{pct:.0f}%" if pct is not None else "—", str(row.get("compactions", 0)), row.get("note", "")]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col == 0:
+                    item.setForeground(QColor(ctl.st.color(row["model_id"])))
+                if col == 3 and pct is not None and pct >= 70:
+                    item.setForeground(QColor("#d97706"))
+                self.table.setItem(r, col, item)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table)
+        row = QHBoxLayout()
+        note = QLabel("Each model compacts automatically at 80%: it summarises the older conversation and keeps the "
+                      "newest messages word for word.")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        row.addWidget(note, 1)
+        self.compact_btn = QPushButton("Compact now")
+        self.compact_btn.setToolTip("Summarise every model's older history now (keeps the latest exchange)")
+        self.compact_btn.clicked.connect(self._compact)
+        self.compact_btn.setEnabled(not ctl.st.busy and bool(ctl.st.messages))
+        row.addWidget(self.compact_btn)
+        layout.addLayout(row)
+
+    def _compact(self) -> None:
+        self.compact_btn.setEnabled(False)
+        self.compact_btn.setText("Compacting…")
+
+        def done(results: list[dict]) -> None:
+            n = sum(1 for r in results if r["compacted"])
+            self.ctl.notice.emit(f"Compacted {n} of {len(results)} models")
+            self.accept()
+
+        self.ctl.call(self.ctl.client.compact(self.ctl.st.session_id), done)
 
 
 class ApprovalCard(QFrame):
@@ -395,10 +461,13 @@ class ChatPanel(QWidget):
         self.tabs = QTabBar()
         self.tabs.setExpanding(False)
         self.tabs.currentChanged.connect(self._tab_changed)
+        self.tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabs.customContextMenuRequested.connect(self._tab_menu)
         layout.addWidget(self.tabs)
         self.cost_bar = CostBar(ctl)
         self.cost_bar.model_clicked.connect(self.show_model_tab)
         self.cost_bar.details_clicked.connect(self.show_cost_details)
+        self.cost_bar.context_clicked.connect(self.show_context)
         layout.addWidget(self.cost_bar)
 
         self.scroll = QScrollArea()
@@ -481,10 +550,44 @@ class ChatPanel(QWidget):
             return st.name(model_id)
         return f"{st.name(model_id)}  {'$?' if price_unknown(st, model_id) else money(u.cost)}"
 
+    def _tab_tip(self, model_id: int | None) -> str:
+        p = self.ctl.st.participant(model_id)
+        if not p:
+            return "All models"
+        effort = EFFORT_LABELS.get(p.get("effort") or "", "default")
+        window = window_label(p.get("context_window") or p.get("context_length"))
+        return (f"{p['display_name']}\nContext window: {window} (fixed for this session)\nEffort: {effort}"
+                + ("\nRight-click to change the effort" if p.get("supports_effort") else ""))
+
+    def _tab_menu(self, pos) -> None:  # noqa: ANN001
+        mid = self.tabs.tabData(self.tabs.tabAt(pos))
+        p = self.ctl.st.participant(mid)
+        if not p:
+            return
+        menu = QMenu(self)
+        menu.addAction(f"Context window: {window_label(p.get('context_window') or p.get('context_length'))} (fixed)").setEnabled(False)
+        effort_menu = menu.addMenu("Effort")
+        effort_menu.setEnabled(bool(p.get("supports_effort")))
+        for label, value in [("Default", None)] + [(EFFORT_LABELS[e], e) for e in EFFORTS]:
+            act = effort_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(p.get("effort") == value)
+            act.triggered.connect(lambda _=False, v=value: self.ctl.call(
+                self.ctl.client.update_model_settings(self.ctl.st.session_id, mid, effort=v), self.ctl.set_session))
+        menu.exec(self.tabs.mapToGlobal(pos))
+
     def update_costs(self) -> None:
         for i in range(self.tabs.count()):
             self.tabs.setTabText(i, self._tab_label(self.tabs.tabData(i)))
+            self.tabs.setTabToolTip(i, self._tab_tip(self.tabs.tabData(i)))
         self.cost_bar.refresh()
+
+    def show_context(self) -> None:
+        def show(rows: list[dict]) -> None:
+            self.context_dialog = ContextDialog(self.ctl, rows, self)
+            self.context_dialog.open()
+
+        self.ctl.call(self.ctl.client.context_usage(self.ctl.st.session_id), show)
 
     def show_cost_details(self) -> None:
         def show(rows: list[dict]) -> None:
@@ -500,6 +603,7 @@ class ChatPanel(QWidget):
 
     def rebuild_tabs(self) -> None:
         wanted = [("All", None)] + [(p["display_name"], p["model_id"]) for p in self.ctl.st.participants]
+        # rebuilt below if the models changed; tooltips (effort, context) follow every session update
         current = [self.tabs.tabData(i) for i in range(self.tabs.count())]
         if current == [mid for _, mid in wanted]:
             self.update_costs()
@@ -515,7 +619,7 @@ class ChatPanel(QWidget):
         self.tabs.blockSignals(False)
         self.tab_model = None
         self.tabs.setCurrentIndex(0)
-        self.cost_bar.refresh()
+        self.update_costs()
 
     def rebuild_chips(self) -> None:
         while self.chips_row.count():
@@ -585,6 +689,11 @@ class ChatPanel(QWidget):
     def _send_clicked(self) -> None:
         text = self.composer.toPlainText().strip()
         if not text and not self.pending:
+            return
+        if text.startswith("#") and not self.pending:
+            # like Claude Code: "# always use tabs" goes into memory instead of to the models
+            self.composer.clear()
+            self.ctl.call(self.ctl.client.remember(text), lambda _: self.ctl.notice.emit("Saved to memory: " + text.lstrip("# ")))
             return
         self.composer.clear()
         pending, self.pending = self.pending, []

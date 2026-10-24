@@ -68,10 +68,11 @@ final class AppModel {
     }
 
     /// Starts a session. If the latest one is still empty the server reuses it instead of adding another blank one.
-    func newSession(title: String = "New session", modelIds: [Int], contextMode: String) async -> Session? {
+    func newSession(title: String = "New session", modelIds: [Int], contextMode: String, contextWindows: [Int: Int] = [:]) async -> Session? {
         guard let api else { return nil }
         do {
-            let s = try await api.createSession(title: title, modelIds: modelIds, contextMode: contextMode, reuseEmpty: true)
+            let s = try await api.createSession(title: title, modelIds: modelIds, contextMode: contextMode, reuseEmpty: true,
+                                                contextWindows: contextWindows)
             sessions.removeAll { $0.id == s.id }
             sessions.insert(s, at: 0)
             return s

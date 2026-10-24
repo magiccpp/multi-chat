@@ -121,6 +121,17 @@ async def test_plan_runs_a_replys_commands_in_parallel(client, runner):
     assert elapsed < 2.8, f"took {elapsed:.1f}s: the commands ran one after another"
 
 
+async def test_project_memory_file_in_the_folder(client, runner):
+    r, root = runner
+    (root / "CLAUDE.md").write_text("# Project rules\n- Use tabs\n")
+    models = await models_by_name(client)
+    s = (await client.post("/api/sessions", json={"title": "project-memory", "model_ids": [models["mock-beta"]["id"]],
+                                                  "workspace": {"kind": "runner", "runner_id": r.runner_id, "path": str(root)}})).json()
+    reply = finished(await chat(client, s["id"], "hi"))[0]
+    assert "(project instructions: CLAUDE.md)" in reply["content"]
+    (root / "CLAUDE.md").unlink()
+
+
 async def test_build_edits_runs_command_with_approval_and_reverts(client, runner):
     r, root = runner
     s = await build_session(client, r.runner_id, root)

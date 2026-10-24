@@ -43,6 +43,37 @@ class MessageView:
         )
 
 
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+EFFORT_LABELS = {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "X-High", "max": "Max"}
+SMALL_WINDOW = 256_000  # the smaller choice offered for big models
+CHOICE_ABOVE = 512_000  # models with a larger maximum get a choice: 256K or their maximum
+
+
+def context_choices(context_length: int | None) -> list[int]:
+    """Context windows a user can pick for a model: [256K, max] when the maximum is over 512K, else just [max]."""
+    if not context_length:
+        return []
+    return [SMALL_WINDOW, context_length] if context_length > CHOICE_ABOVE else [context_length]
+
+
+def window_label(tokens: int | None) -> str:
+    """256K, 1M (1,048,576 counts as 1M), 1.5M, 2M ..."""
+    if not tokens:
+        return "default"
+    binary = tokens % 65_536 == 0  # 262,144 = 256K, 1,048,576 = 1M; 256,000 and 128,000 stay decimal
+    if tokens >= 1_000_000:
+        millions = tokens / 1_048_576 if binary else tokens / 1_000_000
+        return f"{millions:.2f}".rstrip("0").rstrip(".") + "M"
+    return f"{tokens // 1024}K" if binary else f"{round(tokens / 1000)}K"
+
+
+def choice_label(tokens: int, choices: list[int]) -> str:
+    """'256K', or for the model's maximum 'Max: 1M (1,048,576 tokens)'."""
+    if choices and tokens == choices[-1]:
+        return f"Max: {window_label(tokens)} ({tokens:,} tokens)"
+    return window_label(tokens)
+
+
 @dataclass
 class UsageView:
     model_id: int | None
@@ -103,6 +134,9 @@ class SessionState:
             return "You"
         m = self.models.get(model_id)
         return m["display_name"] if m else f"model {model_id}"
+
+    def participant(self, model_id: int | None) -> dict[str, Any] | None:
+        return next((p for p in self.participants if p["model_id"] == model_id), None)
 
     def color(self, model_id: int | None) -> str:
         m = self.models.get(model_id or -1)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from app import availability
 from app import db as dbmod
-from app.api import attachments, endpoints, models, runners, sessions, ssh_connections, stats, votes, workspace
+from app.api import attachments, endpoints, memory, models, runners, sessions, ssh_connections, stats, votes, workspace
 from app.auth import require_token
 from app.config import get_settings
 from app.config_sync import get_setting, load_config, sync_config
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "version": app.version}
 
     protected = [Depends(require_token)]
-    for r in (attachments.router, endpoints.router, models.router, sessions.router, ssh_connections.router, stats.router, votes.router, workspace.router, admin):
+    for r in (attachments.router, endpoints.router, memory.router, models.router, sessions.router, ssh_connections.router, stats.router, votes.router, workspace.router, admin):
         app.include_router(r, dependencies=protected)
     app.include_router(runners.router)  # per-route auth (the WebSocket checks its own token)
     app.include_router(runners.ws_router)

@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from multichat_desktop import settings
 from multichat_desktop.chat import ChatPanel
 from multichat_desktop.controller import Controller
-from multichat_desktop.dialogs import EndpointsDialog, ModelsDialog, OpenFolderDialog, RunnerDialog
+from multichat_desktop.dialogs import EndpointsDialog, MemoryDialog, ModelsDialog, OpenFolderDialog, RunnerDialog
 from multichat_desktop.stats import StatsWindow
 from multichat_desktop.theme import colors
 from multichat_desktop.workspace import EditorTabs, FileTree
@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         ctl.event.connect(self.on_event)
         ctl.runner_status.connect(self.on_runner_status)
         ctl.error.connect(lambda msg: self.statusBar().showMessage(f"⚠ {msg}", 10000))
+        ctl.notice.connect(lambda msg: self.statusBar().showMessage(msg, 6000))
 
     # ------------------------------------------------------------------ chrome
 
@@ -125,7 +126,8 @@ class MainWindow(QMainWindow):
         self.act_files.triggered.connect(lambda: self._left_page(0))
         self.act_sessions.triggered.connect(lambda: self._left_page(1))
         bar.addSeparator()
-        for text, slot in (("🔌\nEndpoints", self.open_endpoints), ("🖥\nRunner", self.open_runner), ("📊\nStats", self.open_stats)):
+        for text, slot in (("🔌\nEndpoints", self.open_endpoints), ("🧠\nMemory", self.open_memory), ("🖥\nRunner", self.open_runner),
+                           ("📊\nStats", self.open_stats)):
             a = QAction(text, self)
             a.triggered.connect(slot)
             bar.addAction(a)
@@ -247,6 +249,13 @@ class MainWindow(QMainWindow):
             EndpointsDialog(self.ctl, self).open()
 
         self.ctl.call(go())
+
+    def open_memory(self) -> None:
+        def show(data: dict) -> None:
+            self.memory_dialog = MemoryDialog(self.ctl, data, self)
+            self.memory_dialog.open()
+
+        self.ctl.call(self.ctl.client.memory(), show)
 
     def open_runner(self) -> None:
         dlg = RunnerDialog(self)
