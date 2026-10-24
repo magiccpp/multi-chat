@@ -1,0 +1,8 @@
+# HTTPS front end for the MultiChat server (used by compose.https.yaml).
+# Caddy gets a Let's Encrypt certificate for MULTICHAT_DOMAIN automatically (ports 80 and 443 must reach this host).
+{$MULTICHAT_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy server:8000 {
+		flush_interval -1   # stream SSE events immediately
+	}
+}

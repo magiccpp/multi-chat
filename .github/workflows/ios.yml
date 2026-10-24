@@ -1,0 +1,33 @@
+name: iOS
+
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+
+jobs:
+  kit-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: ios/MultiChatKit
+
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+        working-directory: ios
+      - name: Test MultiChatKit on macOS
+        run: swift test
+        working-directory: ios/MultiChatKit
+      - name: Build the app for the iOS simulator (no signing)
+        run: |
+          xcodebuild -project MultiChat.xcodeproj -scheme MultiChat \
+            -destination 'generic/platform=iOS Simulator' -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO build | xcpretty || exit ${PIPESTATUS[0]}
+        working-directory: ios

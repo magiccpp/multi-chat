@@ -1,0 +1,120 @@
+import Foundation
+import XCTest
+@testable import MultiChatKit
+
+final class MultiChatKitTests: XCTestCase {
+    let sessionJSON = """
+    {"id": 3, "title": "Fix login", "workspace_kind": "runner", "runner_id": 1, "ssh_connection_id": null,
+     "workspace_path": "/w", "workspace_label": "pc:/w", "phase": "plan", "context_mode": "shared",
+     "builder_model_id": null, "approve_edits": "auto", "approve_commands": "ask",
+     "created_at": "2026-10-24T00:44:47.463000+00:00", "updated_at": "2026-10-24T00:44:47.463000+00:00",
+     "participants": [{"model_id": 7, "display_name": "Alpha", "color": "#2563eb", "endpoint_kind": "mock", "position": 0},
+                      {"model_id": 8, "display_name": "Beta", "color": "#d97706", "endpoint_kind": "mock", "position": 1}],
+     "busy": false}
+    """
+
+    let modelsJSON = """
+    [{"id": 7, "endpoint_id": 1, "endpoint_name": "demo", "endpoint_kind": "mock", "model_name": "mock-alpha",
+      "display_name": "Alpha", "color": "#2563eb", "input_price": 1.0, "output_price": 2.0, "enabled": true,
+      "supports_tools": true, "source": "config"},
+     {"id": 8, "endpoint_id": 1, "endpoint_name": "demo", "endpoint_kind": "mock", "model_name": "mock-beta",
+      "display_name": "Beta", "color": "#d97706", "input_price": 3.0, "output_price": 15.0, "enabled": true,
+      "supports_tools": true, "source": "config"}]
+    """
+
+    func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try JSONCoding.decoder.decode(T.self, from: Data(json.utf8))
+    }
+
+    func event(_ json: String) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+    }
+
+    func testDecodesServerModels() throws {
+        let s = try decode(Session.self, sessionJSON)
+        XCTAssertEqual(s.participants.map(\.displayName), ["Alpha", "Beta"])
+        XCTAssertEqual(s.workspaceLabel, "pc:/w")
+        let models = try decode([ModelInfo].self, modelsJSON)
+        XCTAssertEqual(models[1].outputPrice, 15.0)
+        let msg = try decode(Message.self, """
+        {"id": 5, "session_id": 3, "seq": 2, "turn_id": "t1", "role": "assistant", "model_id": 7, "phase": "plan",
+         "content": "hi", "tool_calls": [{"id": "c1", "name": "read_file", "arguments": {"path": "a.py"}, "external": true}],
+         "tool_call_id": null, "recipients": null, "status": "complete", "created_at": "x", "vote": 1}
+        """)
+        XCTAssertEqual(msg.toolCalls?.first?.arguments?.argumentSummary, "a.py")
+        XCTAssertEqual(msg.vote, 1)
+    }
+
+    func testSSEParser() {
+        let body = ": connected\n\ndata: {\"type\": \"turn_start\", \"seq\": 1}\n\ndata: {\"type\": \"delta\", \"text\": \"a b\"}\n\n"
+        let events = SSEParser().events(in: body)
+        XCTAssertEqual(events.map { $0["type"]?.string }, ["turn_start", "delta"])
+        XCTAssertEqual(events[1]["text"]?.string, "a b")
+    }
+
+    func testReducerStreamsVotesUsageApprovals() throws {
+        var st = SessionState(
+            session: try decode(Session.self, sessionJSON),
+            messages: [try decode(Message.self, #"{"id": 1, "seq": 1, "turn_id": "t", "role": "user", "content": "q", "recipients": [7]}"#)],
+            usage: [],
+            models: try decode([ModelInfo].self, modelsJSON)
+        )
+        st.apply(try event(#"{"type": "turn_start"}"#))
+        st.apply(try event(#"{"type": "message_start", "message": {"id": 2, "seq": 2, "turn_id": "t", "role": "assistant", "model_id": 7, "content": "", "status": "streaming"}}"#))
+        st.apply(try event(#"{"type": "delta", "message_id": 2, "text": "Hel"}"#))
+        st.apply(try event(#"{"type": "delta", "message_id": 2, "text": "lo"}"#))
+        st.apply(try event(#"{"type": "tool_call", "message_id": 2, "call": {"id": "c1", "name": "run_command", "arguments": {"command": "ls"}}}"#))
+        st.apply(try event(#"{"type": "tool_progress", "call_id": "c1", "text": "a.txt\n"}"#))
+        st.apply(try event(#"{"type": "approval_required", "call_id": "c2", "kind": "edit", "model_id": 7, "path": "a.py", "diff": "+x"}"#))
+        XCTAssertEqual(st.messages[2]?.content, "Hello")
+        XCTAssertTrue(st.busy)
+        XCTAssertEqual(st.approvals["c2"]?.path, "a.py")
+        XCTAssertEqual(st.progress["c1"], "a.txt\n")
+        st.apply(try event(#"{"type": "vote", "message_id": 2, "value": 1}"#))
+        st.apply(try event(#"{"type": "message_end", "message": {"id": 2, "seq": 2, "turn_id": "t", "role": "assistant", "model_id": 7, "content": "Hello", "status": "complete"}}"#))
+        st.apply(try event(#"{"type": "tool_result", "call_id": "c1", "message": {"id": 3, "seq": 3, "turn_id": "t", "role": "tool", "model_id": 7, "content": "a.txt", "tool_call_id": "c1"}}"#))
+        st.apply(try event(#"{"type": "usage", "model_id": 7, "input_tokens": 10, "output_tokens": 5, "cost": 0.25, "estimated": false}"#))
+        st.apply(try event(#"{"type": "approval_resolved", "call_id": "c2"}"#))
+        st.apply(try event(#"{"type": "turn_end", "status": "complete"}"#))
+        XCTAssertEqual(st.messages[2]?.vote, 1, "vote survives message_end")
+        XCTAssertEqual(st.results["c1"]?.content, "a.txt")
+        XCTAssertEqual(st.usage[7]?.tokens, 15)
+        XCTAssertEqual(st.totalCost, 0.25)
+        XCTAssertTrue(st.approvals.isEmpty)
+        XCTAssertFalse(st.busy)
+        XCTAssertEqual(st.visible().map(\.id), [1, 2], "tool results are shown inside replies")
+        XCTAssertEqual(st.visible(for: 8).map(\.id), [], "Beta's tab: the prompt was not addressed to it")
+        XCTAssertEqual(st.name(7), "Alpha")
+    }
+
+    /// Talks to a real server when MULTICHAT_TEST_URL and MULTICHAT_TEST_TOKEN are set.
+    func testLiveServerRoundTrip() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let url = env["MULTICHAT_TEST_URL"].flatMap(URL.init(string:)), let token = env["MULTICHAT_TEST_TOKEN"] else {
+            throw XCTSkip("set MULTICHAT_TEST_URL and MULTICHAT_TEST_TOKEN")
+        }
+        let api = APIClient(baseURL: url, token: token)
+        let models = try await api.models()
+        let wanted = (env["MULTICHAT_TEST_MODELS"] ?? "").split(separator: ",").map(String.init)
+        let ids = models.filter { wanted.isEmpty ? $0.endpointKind == "mock" : wanted.contains($0.modelName) }.prefix(3).map(\.id)
+        XCTAssertFalse(ids.isEmpty)
+        let s = try await api.createSession(title: "Swift client test", modelIds: Array(ids), contextMode: "shared")
+        try await api.chat(s.id, content: "Reply with one short sentence about Swift.")
+        let messages = try await api.messages(s.id)
+        let replies = messages.filter(\.isReply)
+        XCTAssertEqual(Set(replies.compactMap(\.modelId)), Set(ids))
+        try await api.vote(messageId: replies[0].id, value: 1)
+        let after = try await api.messages(s.id)
+        XCTAssertEqual(after.first { $0.id == replies[0].id }?.vote, 1)
+        let built = try await api.pickBuilder(s.id, modelId: ids[0])
+        XCTAssertTrue(built.isBuild)
+        let usage = try await api.usage(s.id)
+        XCTAssertEqual(usage.count, ids.count)
+        let stats = try await api.stats()
+        XCTAssertGreaterThan(stats.totals.inputTokens, 0)
+        let state = SessionState(session: built, messages: after, usage: usage, models: models)
+        XCTAssertEqual(state.visible().count, replies.count + 1)
+        print("live replies:", replies.map { "\(state.name($0.modelId)): \($0.content.prefix(80))" })
+        try await api.deleteSession(s.id)
+    }
+}

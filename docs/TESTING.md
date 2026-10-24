@@ -101,3 +101,15 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
 | Install command fails "needs administrator" | expected — the runner never elevates; run that install yourself |
 
 Logs: server `docker compose logs -f server`; the Windows app prints to the console when started from source.
+
+## C. iPhone app (needs a Mac with Xcode 16+)
+
+1. On the server, enable HTTPS: point a DNS name at it, open ports 80/443, add `MULTICHAT_DOMAIN=your.domain` to `.env`,
+   then `docker compose -f compose.yaml -f compose.https.yaml up -d`. Check `https://your.domain/api/health`.
+   (At home you can skip this and use `http://<server LAN IP>:8000`.)
+2. On the Mac: `brew install xcodegen && cd ios && xcodegen && open MultiChat.xcodeproj`.
+3. Target **MultiChat → Signing & Capabilities**: choose your Team (Apple ID) and a unique bundle id.
+4. iPhone: enable **Developer Mode** (Settings → Privacy & Security), connect it, select it in Xcode, press **Run**.
+5. In the app: server URL + token → Sessions → ✎ new session → pick the OpenRouter models → ask something; vote with
+   👍/👎; long-press-free "…" menu → **Pick as builder**; approvals from a desktop/TUI runner appear as cards
+   (edits open a diff). Stats tab shows cost and win rate per model.

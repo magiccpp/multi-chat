@@ -1,0 +1,24 @@
+# Optional HTTPS in front of the server (needed by the iPhone app and recommended for remote desktop/TUI clients).
+#   set MULTICHAT_DOMAIN=multichat.example.com in .env (DNS A/AAAA record pointing at this host), then
+#   docker compose -f compose.yaml -f compose.https.yaml up -d     (or: nerdctl compose -f … -f … up -d)
+# Clients then use https://multichat.example.com
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      MULTICHAT_DOMAIN: ${MULTICHAT_DOMAIN:?set MULTICHAT_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

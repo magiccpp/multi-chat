@@ -1,0 +1,37 @@
+# Xcode project definition. Generate the project with:  brew install xcodegen && xcodegen
+name: MultiChat
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  MultiChatKit:
+    path: MultiChatKit
+targets:
+  MultiChat:
+    type: application
+    platform: iOS
+    sources: [MultiChat]
+    dependencies:
+      - package: MultiChatKit
+    info:
+      path: MultiChat/Info.plist
+      properties:
+        CFBundleDisplayName: MultiChat
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true   # lets you test against http://<LAN IP or .local>; use HTTPS otherwise
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.multichat   # change to your own reverse-DNS id
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: ""          # set your team in Xcode → Signing & Capabilities
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_PREVIEWS: YES

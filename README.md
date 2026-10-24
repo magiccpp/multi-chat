@@ -8,7 +8,7 @@ A self-hosted code agent that talks to several LLMs at once. You **plan** with m
 - **Votes and statistics**: ▲/▼ on any reply from the desktop app, the TUI or the plain CLI. A statistics view shows cost, tokens, latency, time-to-first-token, tokens/s, approval rate, win rate (how often a model was picked as builder) and cost per upvote.
 - **Token meter**: per-model tokens and $ for the current session, live. Values estimated when a vendor doesn't report usage are marked with `~`.
 - **Where work happens**: on **your PC** through a runner built into the clients (PowerShell on Windows, bash on Linux), on **SSH hosts**, or **no folder** at all (chat only; attach one later). Approvals per session, per-turn diffs and **Revert**.
-- **Clients**: a **Windows desktop app** (PySide6, IDE layout) and a **Linux terminal UI** (Textual, opencode-style). Both connect to one **containerized server** (FastAPI + PostgreSQL) that holds all configuration and keys.
+- **Clients**: a **Windows desktop app** (PySide6, IDE layout), a **Linux terminal UI** (Textual, opencode-style) and an **iPhone app** (SwiftUI, iOS 17+). All connect to one **containerized server** (FastAPI + PostgreSQL). The server holds all configuration and keys, and stores every session and chat, so each device sees the same history.
 
 ```
  Windows desktop app ─┐                       ┌─ OpenAI / Anthropic / OpenRouter / DeepSeek / …
@@ -106,6 +106,15 @@ On first start, enter the server URL and token; the token is kept in Windows Cre
 - **Stats** (left bar): KPI tiles, a sortable per-model table, and cost, win-rate and cost-per-day charts.
 - The status bar shows per-model tokens and $ for the session, plus the runner state.
 
+## 4. iPhone app
+
+Native SwiftUI (iOS 17+, iPhone 13 and newer): sessions and history, chat with model tabs, votes, pick builder, approvals with diffs, statistics. Build it with Xcode on a Mac: see [`ios/README.md`](ios/README.md). The phone needs the server over HTTPS. The optional `compose.https.yaml` puts Caddy with automatic Let's Encrypt certificates in front:
+
+```bash
+echo "MULTICHAT_DOMAIN=multichat.example.com" >> .env
+docker compose -f compose.yaml -f compose.https.yaml up -d
+```
+
 ## How a session works
 
 1. **PLAN**: your message goes to the ticked models. *Isolated* runs them in parallel, each seeing only its own thread. *Shared* runs them one after another, each seeing earlier replies as `[Model said]: …`. With a folder attached, models get read-only tools (`list_dir`, `read_file`, `grep`) plus `web_fetch` / `web_search`.
@@ -144,5 +153,6 @@ server/            FastAPI app, Alembic migrations, Dockerfile
 clients/core/      multichat_client: API client, session state, runner, approval MCP bridge
 clients/tui/       multichat_tui: Textual TUI + `multichat` CLI
 clients/desktop/   multichat_desktop: PySide6 app, PyInstaller spec, build_exe.ps1
-install.sh  compose.yaml  compose.test.yaml  config.example.yaml  .env.example  Makefile
+ios/               SwiftUI iPhone app + MultiChatKit Swift package (XcodeGen project.yml)
+install.sh  compose.yaml  compose.https.yaml  compose.test.yaml  Caddyfile  config.example.yaml  .env.example  Makefile
 ```
