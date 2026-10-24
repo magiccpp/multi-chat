@@ -16,6 +16,17 @@ OUTPUT_CAP = 200_000
 IS_WINDOWS = sys.platform == "win32"
 
 
+def hidden() -> dict:
+    """subprocess kwargs that keep a console window from flashing up when the windowed desktop app starts a
+    console program (git, taskkill, `claude --version`, ...). Empty elsewhere."""
+    if not IS_WINDOWS:
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0  # SW_HIDE
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000), "startupinfo": si}
+
+
 def default_shell() -> str:
     if IS_WINDOWS:
         return "pwsh" if shutil.which("pwsh") else "powershell"
@@ -46,7 +57,7 @@ async def kill_tree(proc: asyncio.subprocess.Process) -> None:
         return
     try:
         if IS_WINDOWS:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False, **hidden())
         else:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
@@ -59,7 +70,8 @@ async def kill_tree(proc: asyncio.subprocess.Process) -> None:
 async def spawn(argv: list[str], cwd: Path, env: dict[str, str] | None = None, stdin: bool = False) -> asyncio.subprocess.Process:
     kwargs: dict = {}
     if IS_WINDOWS:
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        kwargs = hidden()
+        kwargs["creationflags"] |= subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     proc = await asyncio.create_subprocess_exec(

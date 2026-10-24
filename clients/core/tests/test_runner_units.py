@@ -82,6 +82,15 @@ async def test_commands_get_end_of_input_immediately(tmp_path):
     assert not r["timed_out"] and "after-eof" in r["output"]
 
 
+def test_console_programs_start_hidden():
+    # the windowed desktop app must not flash console windows for git, taskkill or `claude --version`
+    kw = shell.hidden()
+    if shell.IS_WINDOWS:
+        assert kw["creationflags"] & 0x08000000 and kw["startupinfo"].wShowWindow == 0  # CREATE_NO_WINDOW, SW_HIDE
+    else:
+        assert kw == {}
+
+
 def test_pwsh_uses_standard_native_argument_passing():
     assert "$PSNativeCommandArgumentPassing = 'Standard'" in shell.build_argv("ssh host \"ls\"", "pwsh")[-1]
     assert "PSNativeCommandArgumentPassing" not in shell.build_argv("ls", "powershell")[-1]  # 5.1 doesn't know it

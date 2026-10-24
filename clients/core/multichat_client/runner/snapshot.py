@@ -18,6 +18,7 @@ from pathlib import Path
 
 from multichat_client.config import config_dir
 from multichat_client.runner.fs import SKIP_DIRS, is_binary
+from multichat_client.runner.shell import hidden
 
 MAX_FILE = 1_000_000
 MAX_TOTAL = 100_000_000
@@ -27,7 +28,7 @@ CACHE = config_dir() / "snapshots"
 
 def _git(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, env={**os.environ, **(env or {})}, check=False
+        ["git", *args], cwd=root, capture_output=True, env={**os.environ, **(env or {})}, check=False, **hidden()
     )
 
 

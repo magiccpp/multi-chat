@@ -37,7 +37,7 @@ def detect() -> dict[str, dict]:
         if not exe:
             continue
         try:
-            r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15, check=False)
+            r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15, check=False, **shell.hidden())
             version = (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr).strip() else ""
         except (OSError, subprocess.TimeoutExpired):
             version = ""
