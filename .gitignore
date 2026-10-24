@@ -11,3 +11,5 @@ data/
 .mypy_cache/
 .ruff_cache/
 .ccr-ca.crt
+clients/desktop/installer/Output/
+clients/desktop/installer/multichat.ico

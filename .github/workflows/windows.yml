@@ -1,0 +1,112 @@
+name: Windows app
+
+# Builds MultiChat-Setup.exe (Inno Setup, per-user install, no admin rights) and a portable zip.
+# Pushes to the default branch (and manual runs) publish them on the "desktop-latest" release, so the newest installer
+# is always at https://github.com/<owner>/<repo>/releases/latest/download/MultiChat-Setup.exe
+on:
+  push:
+    branches-ignore: ["dependabot/**"]
+    paths: ["clients/core/**", "clients/desktop/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["clients/core/**", "clients/desktop/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./clients/core ./clients/desktop "pyinstaller>=6" pillow pytest pytest-asyncio
+
+      - name: Runner tests on Windows (PowerShell, files, snapshots)
+        run: python -m pytest clients/core/tests -q
+
+      - name: Build MultiChat.exe
+        working-directory: clients/desktop
+        run: |
+          python installer/make_icon.py installer/multichat.ico
+          python -m PyInstaller --noconfirm --clean multichat.spec
+
+      - name: Smoke test the built app
+        working-directory: clients/desktop
+        shell: pwsh
+        run: |
+          $env:MULTICHAT_SMOKE_LOG = "$env:RUNNER_TEMP\smoke.log"
+          $p = Start-Process dist\MultiChat\MultiChat.exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if (Test-Path $env:MULTICHAT_SMOKE_LOG) { Get-Content $env:MULTICHAT_SMOKE_LOG }
+          if ($p.ExitCode -ne 0) { throw "MultiChat.exe --smoke-test exited with $($p.ExitCode)" }
+          if (-not (Test-Path dist\MultiChat\multichat-approval-bridge.exe)) { throw "approval bridge missing" }
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          base=$(python -c "import tomllib; print(tomllib.load(open('clients/desktop/pyproject.toml','rb'))['project']['version'])")
+          echo "version=$base.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE -ne 0) { throw "installing Inno Setup failed" } }
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" clients\desktop\installer\multichat.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Compress-Archive -Path clients\desktop\dist\MultiChat -DestinationPath clients\desktop\installer\Output\MultiChat-portable.zip
+          Get-ChildItem clients\desktop\installer\Output
+
+      - name: Test the installer (silent install, start, uninstall)
+        shell: pwsh
+        run: |
+          $setup = Start-Process clients\desktop\installer\Output\MultiChat-Setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "setup exited with $($setup.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\MultiChat\MultiChat.exe"
+          if (-not (Test-Path $exe)) { throw "MultiChat.exe not installed at $exe" }
+          $env:MULTICHAT_SMOKE_LOG = "$env:RUNNER_TEMP\smoke2.log"
+          $p = Start-Process $exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $env:MULTICHAT_SMOKE_LOG; throw "installed app failed the smoke test" }
+          $un = Start-Process "$env:LOCALAPPDATA\Programs\MultiChat\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait -PassThru
+          if ($un.ExitCode -ne 0) { throw "uninstall exited with $($un.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MultiChat-Windows-${{ steps.version.outputs.version }}
+          path: clients/desktop/installer/Output/*
+
+      - name: Publish on the desktop-latest release
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git tag -f desktop-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/desktop-latest
+          notes="MultiChat for Windows $VERSION (commit ${GITHUB_SHA::7}).
+
+          **Install:** download **MultiChat-Setup.exe** and run it. It installs for your user only (no administrator rights),
+          adds a Start menu entry and closes a running MultiChat when you upgrade. Windows SmartScreen may say the publisher is
+          unknown because the installer isn't code-signed: click *More info* → *Run anyway*.
+
+          **Portable:** MultiChat-portable.zip — unzip anywhere and run MultiChat.exe.
+
+          On first start enter your server URL and the token (MULTICHAT_API_TOKEN from the server's .env)."
+          if gh release view desktop-latest >/dev/null 2>&1; then
+            gh release edit desktop-latest --title "MultiChat for Windows $VERSION" --notes "$notes" --latest
+          else
+            gh release create desktop-latest --title "MultiChat for Windows $VERSION" --notes "$notes" --latest
+          fi
+          gh release upload desktop-latest clients/desktop/installer/Output/MultiChat-Setup.exe clients/desktop/installer/Output/MultiChat-portable.zip --clobber

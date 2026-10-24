@@ -60,20 +60,13 @@ Stop with `make down`; data stays in the `pgdata` / `appdata` volumes.
 
 ## B. Windows app
 
-1. Install **Python 3.12 or 3.13** from python.org (tick *Add python.exe to PATH*) and **Git for Windows**.
-2. Get the code (git clone as above, or unzip) and open **PowerShell** in the folder.
-3. **Build the .exe** (takes a few minutes the first time):
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File clients\desktop\build_exe.ps1
-   .\clients\desktop\dist\MultiChat\MultiChat.exe
-   ```
-   Or run from source without building:
-   ```powershell
-   py -3 -m venv .venv
-   .\.venv\Scripts\pip install .\clients\core .\clients\desktop
-   .\.venv\Scripts\multichat-desktop
-   ```
-   Windows SmartScreen may warn about an unsigned app: *More info → Run anyway*.
+1. **Download** [MultiChat-Setup.exe](https://github.com/magiccpp/multi-chat/releases/latest/download/MultiChat-Setup.exe)
+   (or open https://github.com/magiccpp/multi-chat/releases/latest and click it under *Assets*).
+2. **Run it.** If SmartScreen says "Windows protected your PC" (the installer isn't code-signed): *More info → Run
+   anyway*. Click through the wizard; no administrator rights are needed. Tick *Start MultiChat when I sign in* if you
+   want the runner available whenever you're logged in.
+3. **Upgrading** later: download the new MultiChat-Setup.exe and run it. It closes the running MultiChat (also the one
+   in the tray) and keeps your server URL, token and runner folders. Uninstall from *Settings → Apps → MultiChat*.
 4. **Connect**: server URL `http://<server-ip>:8000`, token = `MULTICHAT_API_TOKEN` from the server's `.env`
    (stored in Windows Credential Manager).
 5. **Plan with several models**: click **Models (0)** → type e.g. `flash` in the search box → tick a few OpenRouter

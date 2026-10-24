@@ -93,15 +93,11 @@ multichat login                   # change server/token
 
 ## 3. Windows: desktop app
 
-Build `MultiChat.exe` on a Windows machine with Python 3.12:
+**Download [MultiChat-Setup.exe](https://github.com/magiccpp/multi-chat/releases/latest/download/MultiChat-Setup.exe)** (from the [latest release](https://github.com/magiccpp/multi-chat/releases/latest)) and run it. Nothing else is needed: no Python, no PowerShell, no administrator rights. It installs for your user into `%LOCALAPPDATA%\Programs\MultiChat`, adds a Start menu entry (desktop icon and start-at-sign-in are optional), closes a running MultiChat when you upgrade, and can be removed from *Settings → Apps*. The installer isn't code-signed, so SmartScreen may say "Windows protected your PC": click *More info → Run anyway*. A portable `MultiChat-portable.zip` is on the same release.
 
-```powershell
-git clone https://github.com/magiccpp/multi-chat.git; cd multi-chat
-powershell -ExecutionPolicy Bypass -File clients\desktop\build_exe.ps1
-clients\desktop\dist\MultiChat\MultiChat.exe
-```
+The installer is built by GitHub Actions (`.github/workflows/windows.yml`) on every push that changes the Windows app: it runs the runner tests on Windows, builds the app with PyInstaller, smoke-tests the exe, builds the installer with Inno Setup, installs and uninstalls it silently, then publishes it on the `desktop-latest` release.
 
-Or run from source: `pip install clients\core clients\desktop` then `multichat-desktop` (or `python -m multichat_desktop`).
+Developers can build locally with `clients\desktop\build_exe.ps1` (Python 3.12; it stops a running MultiChat first, and also builds the installer if Inno Setup 6 is installed), or run from source: `pip install clients\core clients\desktop`, then `multichat-desktop`.
 
 On first start, enter the server URL and token; the token is kept in Windows Credential Manager. Then:
 

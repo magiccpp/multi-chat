@@ -60,5 +60,40 @@ def main() -> int:
     return 0
 
 
+def smoke_test() -> int:
+    """Start the UI without a server (offscreen) to prove the frozen app has all its modules and Qt plugins.
+    Writes a log to %TEMP%\\multichat-smoke.log because a windowed exe has no console."""
+    import tempfile
+    import traceback
+    from pathlib import Path
+
+    log = Path(os.environ.get("MULTICHAT_SMOKE_LOG") or Path(tempfile.gettempdir()) / "multichat-smoke.log")
+    if not os.environ.get("QT_QPA_PLATFORM"):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    try:
+        from PySide6.QtCore import QBuffer, QIODevice
+        from PySide6.QtGui import QColor, QImage
+
+        from multichat_desktop import attachments, stats  # noqa: F401 - imported to prove they load
+
+        app = QApplication(sys.argv)
+        theme.apply(app)
+        window = MainWindow(Controller(MultiChatClient("http://127.0.0.1:9", "smoke-test")))
+        window.show()
+        app.processEvents()
+        img = QImage(8, 8, QImage.Format.Format_RGB32)
+        img.fill(QColor("#2563eb"))
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        assert img.save(buf, "PNG") and attachments.thumbnail(bytes(buf.data()), 4) is not None, "image plugins missing"
+        window.quitting = True
+        window.close()
+        log.write_text("ok\n", encoding="utf-8")
+        return 0
+    except Exception:  # noqa: BLE001
+        log.write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
+
+
 if __name__ == "__main__":
     sys.exit(main())
