@@ -39,6 +39,7 @@ class RuntimeDefaults:
     command_timeout: int
     output_limit: int
     plan_commands: str = "auto"
+    plan_command_timeout: int = 120
 
 
 async def runtime_defaults(db: AsyncSession) -> RuntimeDefaults:
@@ -49,6 +50,7 @@ async def runtime_defaults(db: AsyncSession) -> RuntimeDefaults:
         command_timeout=int(d.get("command_timeout", s.command_timeout)),
         output_limit=int(d.get("tool_output_limit", s.tool_output_limit)),
         plan_commands=str(d.get("plan_commands", "auto")),
+        plan_command_timeout=int(d.get("plan_command_timeout", 120)),
     )
 
 
@@ -306,12 +308,8 @@ class TurnManager:
             if status != "complete" or not calls:
                 return
 
-            for call in calls:
-                bus.publish(
-                    session_id,
-                    {"type": "tool_call", "message_id": msg.id, "model_id": model.id, "call": call.to_json()},
-                )
-                ctx = ToolContext(
+            def tool_context() -> ToolContext:
+                return ToolContext(
                     session_id=session_id,
                     turn_id=turn_id,
                     model_id=model.id,
@@ -326,9 +324,34 @@ class TurnManager:
                     record_change=record_change,
                     phase=phase,
                     plan_commands=defaults.plan_commands,
+                    plan_command_timeout=defaults.plan_command_timeout,
                 )
+
+            for call in calls:
+                bus.publish(
+                    session_id,
+                    {"type": "tool_call", "message_id": msg.id, "model_id": model.id, "call": call.to_json()},
+                )
+            if phase == "plan":
+                # PLAN tools only read, so a reply's calls run side by side (a slow command doesn't hold up the
+                # rest); results are stored in the order the model asked for them.
+                tasks = [asyncio.ensure_future(execute(call, tool_context())) for call in calls]
                 try:
-                    result = await execute(call, ctx)
+                    results = await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    for t in tasks:
+                        t.cancel()
+                    for call, t in zip(calls, tasks):
+                        done = t.done() and not t.cancelled() and t.exception() is None
+                        text = t.result() if done else "(cancelled by the user)"
+                        await asyncio.shield(self._tool_message(session_id, turn_id, model, call, text))
+                    raise
+                for call, result in zip(calls, results):
+                    await self._tool_message(session_id, turn_id, model, call, result)
+                continue
+            for call in calls:  # BUILD: in order; edits and commands may depend on each other
+                try:
+                    result = await execute(call, tool_context())
                 except asyncio.CancelledError:
                     await asyncio.shield(self._tool_message(session_id, turn_id, model, call, "(cancelled by the user)"))
                     raise

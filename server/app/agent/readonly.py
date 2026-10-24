@@ -27,7 +27,8 @@ ALWAYS = {
     "ulimit", "umask", "fold", "fmt", "expand", "unexpand", "paste", "join", "look", "seq", "yes", "sleep", "tput",
     "cal", "zcat", "zgrep", "zless", "bzcat", "xzcat", "lz4cat", "zstdcat", "base64", "iconv", "nm", "objdump",
     "readelf", "ldd", "size", "lsattr", "getfacl", "namei", "pidof", "vmstat", "iostat", "mpstat", "sar", "dmidecode",
-    "inxi", "neofetch", "fastfetch", "hostid", "tty", "stty", "awk", "gawk", "mawk", "nawk", "watch_none",
+    "inxi", "neofetch", "fastfetch", "hostid", "sensors", "lshw", "hwinfo", "glxinfo", "vainfo", "vdpauinfo", "clinfo",
+    "upower", "acpi", "lsipc", "lsns", "lslocks", "lsirq", "numactl_none", "cpupower_none", "tty", "stty", "awk", "gawk", "mawk", "nawk", "watch_none",
     # Windows cmd
     "findstr", "fc", "comp", "where", "ver", "vol", "systeminfo", "tasklist", "driverquery", "getmac", "quser", "qwinsta",
     "pathping", "tracert", "chdir", "cls", "nbtstat_none", "query", "whoami.exe",
@@ -707,7 +708,24 @@ SPECIAL: dict[str, Callable[[list[str]], Verdict]] = {
     "chcp": lambda a: OK if not a else no("chcp <n> changes the code page"),
     "wsl.exe": lambda a: OK if a and a[0].lower() in ("-l", "--list", "--status", "--version") else no("only wsl --list/--status"),
     "start-sleep": lambda a: OK,
+    # hardware
+    "nvidia-smi": lambda a: no("this nvidia-smi option changes GPU settings") if any(
+        x.split("=")[0] in NVIDIA_SET for x in a) else OK,
+    "rocm-smi": lambda a: no("this rocm-smi option changes GPU settings") if any(
+        x.startswith(("--set", "--reset", "-r", "--load", "--save", "--autorespond")) for x in a) else OK,
+    "smartctl": lambda a: no("smartctl -s/-t/-X changes the drive") if any(
+        x.split("=")[0] in ("-s", "--smart", "-t", "--test", "-X", "--abort", "-o", "--offlineauto", "-S", "--saveauto", "--set") for x in a) else OK,
+    "nvme": lambda a: OK if a[:1] and a[0] in ("list", "smart-log", "id-ctrl", "id-ns", "error-log", "list-subsys", "version", "show-regs", "fw-log") else no("this nvme command changes the drive"),
+    "hdparm": lambda a: OK if a and all(x in ("-I", "-i", "-g", "-C") or not x.startswith("-") for x in a) else no("only hdparm -I/-i/-g/-C is allowed"),
+    "top": lambda a: OK if _has(a, "-b", "-bn1") or any(x.startswith("-b") for x in a) else no("top is interactive; use top -b -n 1"),
+    "iotop": lambda a: OK if any(x.startswith("-b") for x in a) else no("iotop is interactive; use iotop -b -n 1"),
 }
+NVIDIA_SET = {"-pm", "--persistence-mode", "-e", "--ecc-config", "-p", "--reset-ecc-errors", "-c", "--compute-mode",
+              "-dm", "--driver-model", "-fdm", "--force-driver-model", "--gom", "-r", "--gpu-reset", "-vm",
+              "--virt-mode", "-lgc", "--lock-gpu-clocks", "-rgc", "--reset-gpu-clocks", "-lmc", "--lock-memory-clocks",
+              "-rmc", "--reset-memory-clocks", "-ac", "--applications-clocks", "-rac", "--reset-applications-clocks",
+              "-pl", "--power-limit", "-cc", "--cuda-clocks", "-am", "--accounting-mode", "-caa",
+              "--clear-accounted-apps", "--auto-boost-default", "--auto-boost-permission", "mig", "-mig", "--multi-instance-gpu"}
 FIND_DENY = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 
 

@@ -85,7 +85,7 @@ RUN_COMMAND = ToolSpec(
 )
 RUN_COMMAND_READ_ONLY = ToolSpec(
     "run_command",
-    "PLAN phase: run a READ-ONLY shell command in the workspace root (non-interactive; stdin is closed) to inspect "
+    "PLAN phase: run a READ-ONLY shell command (time limit about 2 minutes) in the workspace root (non-interactive; stdin is closed) to inspect "
     "code, configuration, installed software, services, logs, or another machine (e.g. ssh host \"cat /etc/app.conf\", "
     "docker exec / kubectl exec ... cat). Commands that change anything (writing files, installing, uninstalling, "
     "restarting services, git commit/push, ...) are refused; describe those for the BUILD phase instead.",
@@ -106,14 +106,35 @@ READ_ONLY = [LIST_DIR, READ_FILE, GREP]
 WRITE = [WRITE_FILE, EDIT_FILE, RUN_COMMAND]
 
 
+def shell_note(shell: str, os_name: str = "") -> str:
+    """Which shell run_command uses, and the quoting rules that matter there (models default to bash habits)."""
+    s = (shell or "").lower()
+    if s == "pwsh":
+        return ("Shell: PowerShell 7 on Windows (not bash): use PowerShell syntax; pipes pass objects. For ssh, "
+                "write ssh host \"remote command\" with single quotes inside the remote command.")
+    if s.startswith("powershell"):
+        return ("Shell: Windows PowerShell 5.1 on Windows (not bash): use PowerShell syntax. It removes double quotes "
+                "inside arguments passed to programs such as ssh.exe, so for ssh put the remote command in double "
+                "quotes and use only single quotes inside it: ssh host \"grep -E 'MemTotal|MemFree' /proc/meminfo\" "
+                "(never ssh host 'grep -E \"a|b\" file').")
+    if s:
+        return f"Shell: {shell} on {os_name or 'Linux'}."
+    return ""
+
+
+def _with_shell(spec: ToolSpec, workspace: Workspace) -> ToolSpec:
+    note = shell_note(workspace.info.shell, workspace.info.os)
+    return ToolSpec(spec.name, f"{spec.description} {note}".strip(), spec.parameters) if note else spec
+
+
 def tools_for(phase: str, workspace: Workspace, web_search_enabled: bool, plan_commands: str = "auto") -> list[ToolSpec]:
     tools: list[ToolSpec] = []
     if workspace.supports_tools:
         tools += READ_ONLY
         if phase == "build":
-            tools += WRITE
+            tools += [WRITE_FILE, EDIT_FILE, _with_shell(RUN_COMMAND, workspace)]
         elif plan_commands != "off":
-            tools.append(RUN_COMMAND_READ_ONLY)
+            tools.append(_with_shell(RUN_COMMAND_READ_ONLY, workspace))
     tools.append(WEB_FETCH)
     if web_search_enabled:
         tools.append(WEB_SEARCH)
@@ -147,6 +168,7 @@ class ToolContext:
     record_change: Callable[[str, str | None, str | None], Awaitable[None]]
     phase: str = "build"
     plan_commands: str = "auto"  # PLAN: auto (read-only commands run) | ask (also need approval) | off
+    plan_command_timeout: int = 120  # seconds; inspection commands shouldn't block a turn for long
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -228,6 +250,7 @@ async def execute(call: ToolCall, ctx: ToolContext) -> str:
             command = args["command"]
             timeout = min(int(args.get("timeout") or ctx.command_timeout), ctx.command_timeout * 6)
             if ctx.phase == "plan":
+                timeout = min(int(args.get("timeout") or ctx.plan_command_timeout), ctx.plan_command_timeout)
                 if ctx.plan_commands == "off":
                     return "Error: commands are turned off in the PLAN phase."
                 verdict = check_command(command)

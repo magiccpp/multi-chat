@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import base64
 
+from app.agent.tools import shell_note
 from app.providers.base import ChatMessage, ImagePart, ToolCall
 from app.tables import Message
 
@@ -54,7 +55,7 @@ SEES_OTHERS = ("shared", "relay")
 def _shell_hint(ws: WorkspaceView) -> str:
     if ws.shell.lower().startswith(("powershell", "pwsh")):
         return (
-            "Commands run in Windows PowerShell, non-interactively (stdin is closed). Use non-interactive flags, "
+            f"{shell_note(ws.shell, ws.os)} Commands run non-interactively (stdin is closed). Use non-interactive flags, "
             "e.g. `winget install --id X -e --silent --accept-package-agreements --accept-source-agreements`, "
             "`pip install ...`, `npm install --yes`. Installs that need administrator rights will fail; tell the "
             "user to run them elevated instead."

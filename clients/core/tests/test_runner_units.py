@@ -76,6 +76,17 @@ async def test_shell_run_timeout_and_output(tmp_path):
     assert r["exit_code"] == 3
 
 
+async def test_commands_get_end_of_input_immediately(tmp_path):
+    # a program that reads stdin (like a remote grep without a file over ssh) must not wait for input
+    r = await shell.run("cat; echo after-eof", tmp_path, 5)
+    assert not r["timed_out"] and "after-eof" in r["output"]
+
+
+def test_pwsh_uses_standard_native_argument_passing():
+    assert "$PSNativeCommandArgumentPassing = 'Standard'" in shell.build_argv("ssh host \"ls\"", "pwsh")[-1]
+    assert "PSNativeCommandArgumentPassing" not in shell.build_argv("ls", "powershell")[-1]  # 5.1 doesn't know it
+
+
 def test_approval_mcp_protocol(monkeypatch):
     init = approval_mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
     assert init["result"]["protocolVersion"] == "2025-03-26"

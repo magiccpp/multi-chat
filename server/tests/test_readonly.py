@@ -133,6 +133,16 @@ READ_ONLY = [
     "Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5",
     'ssh user@server "docker inspect app | jq \'.[0].Config.Env\'"',
     "ssh user@server 'cd /srv/app && git log -5 --oneline && cat docker-compose.yml'",
+    # hardware
+    "sensors",
+    "nvidia-smi",
+    "nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu --format=csv",
+    "ssh nuc2 \"sensors; nvidia-smi\"",
+    "smartctl -a /dev/sda",
+    "nvme list",
+    "lshw -short",
+    "top -b -n 1 | head -20",
+    "rocm-smi --showtemp",
     # data that only looks dangerous
     'echo "rm -rf /"',
     "grep -rn install .",
@@ -271,6 +281,11 @@ REFUSED = [
     "kubectl get pods -w",
     "docker logs -f web",
     "winget upgrade --id Git.Git",
+    "nvidia-smi -pl 200",
+    "nvidia-smi --gpu-reset",
+    "smartctl -t long /dev/sda",
+    "top",
+    "rocm-smi --setfan 50",
 ]
 
 
@@ -285,3 +300,18 @@ def test_changing_commands_are_refused(command):
     v = check_command(command)
     assert not v, f"{command!r} was allowed"
     assert v.reason
+
+
+def test_run_command_names_the_shell():
+    from app.agent.tools import shell_note, tools_for
+    from app.workspaces.base import WorkspaceInfo
+
+    class Ws:
+        supports_tools = True
+        info = WorkspaceInfo(kind="runner", os="Windows", shell="powershell")
+
+    plan_tool = next(t for t in tools_for("plan", Ws(), False) if t.name == "run_command")
+    assert "Windows PowerShell 5.1" in plan_tool.description and "single quotes" in plan_tool.description
+    build_tool = next(t for t in tools_for("build", Ws(), False) if t.name == "run_command")
+    assert "Windows PowerShell 5.1" in build_tool.description
+    assert "PowerShell 7" in shell_note("pwsh") and "bash" in shell_note("bash", "Linux")

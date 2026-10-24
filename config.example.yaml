@@ -118,5 +118,6 @@ defaults:
   approve_edits: auto              # auto | ask — for new sessions
   approve_commands: ask            # BUILD: ask before each command
   plan_commands: auto              # PLAN: read-only commands (git log, Get-ChildItem, ssh host "cat ...") run: auto | ask | off
+  plan_command_timeout: 120        # seconds per PLAN command (BUILD uses command_timeout)
   max_steps: 40                    # tool-loop steps per model per turn
   command_timeout: 600             # seconds

@@ -26,10 +26,14 @@ def build_argv(command: str, shell: str | None = None) -> list[str]:
     shell = shell or default_shell()
     if shell in ("pwsh", "powershell"):
         exe = "pwsh" if shell == "pwsh" else "powershell.exe"
-        # UTF-8 output so the server receives readable text, and errors stop the script.
+        # UTF-8 output so the server receives readable text. PowerShell 7.3+: pass arguments to native programs
+        # (ssh.exe, git.exe, ...) with standard quoting, so embedded double quotes survive; Windows PowerShell 5.1
+        # strips them, which the model is told about (see the server's shell notes).
         script = (
             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; "
-            "$ProgressPreference = 'SilentlyContinue'; " + command
+            "$ProgressPreference = 'SilentlyContinue'; "
+            + ("$PSNativeCommandArgumentPassing = 'Standard'; " if shell == "pwsh" else "")
+            + command
         )
         return [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
     if shell == "bash":
@@ -58,15 +62,21 @@ async def spawn(argv: list[str], cwd: Path, env: dict[str, str] | None = None, s
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     else:
         kwargs["start_new_session"] = True
-    return await asyncio.create_subprocess_exec(
+    proc = await asyncio.create_subprocess_exec(
         *argv,
         cwd=str(cwd),
         env={**os.environ, **(env or {})},
-        stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
+        # Not DEVNULL: Windows OpenSSH never sends EOF to the remote side for a NUL stdin, so a remote command
+        # that reads stdin (e.g. `grep pattern` without a file) waits until the timeout. A pipe that is closed
+        # right away gives every program an immediate end of input.
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT if not stdin else asyncio.subprocess.PIPE,
         **kwargs,
     )
+    if not stdin and proc.stdin is not None:
+        proc.stdin.close()
+    return proc
 
 
 async def run(

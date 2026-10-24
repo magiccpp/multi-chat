@@ -101,6 +101,26 @@ async def test_plan_runs_read_only_commands_and_refuses_changes(client, runner):
     assert not (root / "made-in-plan").exists() and not (root / "out.txt").exists()
 
 
+async def test_plan_runs_a_replys_commands_in_parallel(client, runner):
+    import time
+
+    r, root = runner
+    models = await models_by_name(client)
+    s = (await client.post("/api/sessions", json={"title": "plan-parallel", "model_ids": [models["mock-beta"]["id"]],
+                                                  "workspace": {"kind": "runner", "runner_id": r.runner_id, "path": str(root)}})).json()
+    prompt = "\n".join([
+        "Two slow checks",
+        '@tool run_command {"command": "sleep 1.5 && echo first"}',
+        '@tool run_command {"command": "sleep 1.5 && echo second"}',
+    ])
+    started = time.monotonic()
+    events = await chat(client, s["id"], prompt)
+    elapsed = time.monotonic() - started
+    results = [e["message"]["content"] for e in events if e["type"] == "tool_result"]
+    assert "first" in results[0] and "second" in results[1]  # stored in the order the model asked
+    assert elapsed < 2.8, f"took {elapsed:.1f}s: the commands ran one after another"
+
+
 async def test_build_edits_runs_command_with_approval_and_reverts(client, runner):
     r, root = runner
     s = await build_session(client, r.runner_id, root)
