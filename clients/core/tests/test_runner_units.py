@@ -14,20 +14,20 @@ def test_snapshot_detects_changes(tmp_path, monkeypatch, use_git):
     monkeypatch.setattr(snapshot, "CACHE", tmp_path / "cache")
     root = tmp_path / "proj"
     root.mkdir()
-    (root / "a.txt").write_text("one\n")
-    (root / "gone.txt").write_text("bye\n")
+    (root / "a.txt").write_bytes(b"one\n")
+    (root / "gone.txt").write_bytes(b"bye\r\n")  # CRLF survives the snapshot unchanged
     (root / "node_modules").mkdir()
     (root / "node_modules" / "ignored.js").write_text("x")
     if use_git:
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     ref = snapshot.begin(root)
     assert ref.startswith("git:" if use_git else "copy:")
-    (root / "a.txt").write_text("two\n")
+    (root / "a.txt").write_bytes(b"two\n")
     (root / "gone.txt").unlink()
     (root / "new.txt").write_text("hi\n")
     changes = {c["path"]: c for c in snapshot.changes(root, ref)}
     assert changes["a.txt"] == {"path": "a.txt", "before": "one\n", "after": "two\n"}
-    assert changes["gone.txt"]["after"] is None and changes["gone.txt"]["before"] == "bye\n"
+    assert changes["gone.txt"]["after"] is None and changes["gone.txt"]["before"] == "bye\r\n"
     assert changes["new.txt"]["before"] is None
     assert not any("node_modules" in p for p in changes)
 

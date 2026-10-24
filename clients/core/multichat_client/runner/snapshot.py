@@ -115,6 +115,11 @@ def begin(root: Path) -> str:
     return f"copy:{snap_id}"
 
 
+def _text(path: Path) -> str:
+    # bytes, not read_text(): keep CRLF as-is so before/after compare equally on Windows
+    return path.read_bytes().decode("utf-8", errors="replace")
+
+
 def changes(root: Path, ref: str) -> list[dict]:
     kind, _, value = ref.partition(":")
     if kind == "git":
@@ -136,9 +141,9 @@ def changes(root: Path, ref: str) -> list[dict]:
         if is_binary(data):
             continue
         if manifest.get(rel) != _digest(data):
-            before = (dest / "files" / rel).read_text(encoding="utf-8", errors="replace") if rel in manifest else None
+            before = _text(dest / "files" / rel) if rel in manifest else None
             result.append({"path": rel, "before": before, "after": data.decode("utf-8", errors="replace")})
     for rel in manifest.keys() - seen:
-        result.append({"path": rel, "before": (dest / "files" / rel).read_text(encoding="utf-8", errors="replace"), "after": None})
+        result.append({"path": rel, "before": _text(dest / "files" / rel), "after": None})
     shutil.rmtree(dest, ignore_errors=True)
     return result
