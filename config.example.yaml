@@ -1,0 +1,109 @@
+# MultiChat backend configuration. Copy to config.yaml and edit; mounted read-only into the server.
+# Synced into the database on start-up and on `POST /api/admin/reload-config`.
+#   - Rows defined here are read-only from the clients (endpoints removed here are disabled, not deleted).
+#   - ${NAME} is replaced from the server's environment (.env); ${NAME:-default} supplies a fallback.
+#   - Prices are USD per 1M tokens and drive the cost columns. Set them from each vendor's pricing page;
+#     a model with price 0 still records tokens. OpenRouter models imported from a client get prices automatically.
+
+endpoints:
+  - name: anthropic
+    kind: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    models:
+      - {name: claude-opus-5-5, display_name: Claude Opus 5.5, color: "#d97706", input_price: 4.00, output_price: 20.00}
+      - {name: claude-sonnet-5-5, display_name: Claude Sonnet 5.5, color: "#ea580c", input_price: 2.00, output_price: 10.00}
+      - {name: claude-haiku-5-5, display_name: Claude Haiku 5.5, color: "#f59e0b", input_price: 0.10, output_price: 0.50}
+
+  - name: openai
+    kind: openai_compatible
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    models:
+      # Use model ids from your OpenAI account (or "Import models" in the desktop app).
+      - {name: gpt-5, display_name: GPT-5, color: "#10a37f", input_price: 0, output_price: 0}
+
+  - name: deepseek
+    kind: openai_compatible
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}
+    models:
+      - {name: deepseek-chat, display_name: DeepSeek Chat, color: "#2563eb", input_price: 0, output_price: 0}
+
+  - name: openrouter
+    kind: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
+    models: []   # add ids like "google/gemini-2.5-pro", or import them (with prices) from a client
+
+  # GitHub Models: OpenAI-compatible, token needs the `models:read` permission.
+  # - name: github-models
+  #   kind: openai_compatible
+  #   base_url: https://models.github.ai/inference
+  #   api_key: ${GITHUB_MODELS_TOKEN}
+  #   models:
+  #     - {name: openai/gpt-4.1, display_name: GPT-4.1 (GitHub), color: "#6e40c9"}
+
+  # Local models through Ollama (reachable from the server container):
+  # - name: ollama
+  #   kind: openai_compatible
+  #   base_url: http://host.docker.internal:11434/v1
+  #   models:
+  #     - {name: qwen2.5-coder:14b, display_name: Qwen Coder (local), color: "#0891b2"}
+
+  # ---- Agent CLIs: run on the machine that holds the session's folder (a runner or SSH host) ----
+  # The CLI must be installed there. Model "default" uses the CLI's own default model.
+  - name: claude-code
+    kind: agent_cli
+    driver: claude_code
+    api_key: ${ANTHROPIC_API_KEY}   # passed as ANTHROPIC_API_KEY; leave empty to use the CLI's own sign-in on that machine
+    models:
+      - {name: default, display_name: Claude Code, color: "#c2410c"}
+
+  - name: cursor
+    kind: agent_cli
+    driver: cursor
+    api_key: ${CURSOR_API_KEY}      # from your Cursor dashboard; passed as CURSOR_API_KEY
+    models:
+      - {name: default, display_name: Cursor, color: "#111827"}
+
+  - name: copilot
+    kind: agent_cli
+    driver: copilot
+    api_key: ${COPILOT_GITHUB_TOKEN}  # passed as GH_TOKEN; leave empty to use `copilot login` on that machine
+    models:
+      - {name: default, display_name: GitHub Copilot, color: "#6e40c9"}
+
+  # Offline demo models (no key needed) — handy to try the clients.
+  - name: demo
+    kind: mock
+    base_url: mock://local?delay=0.02
+    enabled: true
+    models:
+      - {name: mock-alpha, display_name: Demo Alpha, color: "#2563eb"}
+      - {name: mock-beta, display_name: Demo Beta, color: "#db2777"}
+
+# SSH hosts the agents can work on (also addable from the clients).
+# The host key must be confirmed once from a client (fingerprint check) unless host_key is given here.
+ssh_connections: []
+#  - name: devbox
+#    host: devbox.example.com
+#    port: 22
+#    username: dev
+#    auth: key                     # key | password | agent
+#    private_key_file: /config/devbox_ed25519
+#    shell: bash                   # bash | powershell (Windows OpenSSH)
+
+# Web search for the agents' web_search tool (web_fetch needs no key).
+web_search: {}
+#  provider: brave                 # brave | tavily | searxng
+#  api_key: ${BRAVE_API_KEY}
+#  base_url: https://searx.example.com   # searxng only
+
+web:
+  allow_private: false             # let web_fetch reach private/LAN addresses
+
+defaults:
+  approve_edits: auto              # auto | ask — for new sessions
+  approve_commands: ask
+  max_steps: 40                    # tool-loop steps per model per turn
+  command_timeout: 600             # seconds

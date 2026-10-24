@@ -1,0 +1,27 @@
+# Runs the server test suite against a throw-away Postgres:
+#   docker compose -f compose.test.yaml run --rm tests     (or nerdctl compose ...)
+name: multichat-test
+
+services:
+  testdb:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: multichat
+      POSTGRES_PASSWORD: multichat
+      POSTGRES_DB: multichat_test
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  tests:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        WITH_TESTS: "1"
+    image: multichat-server:test
+    depends_on:
+      - testdb
+    environment:
+      DATABASE_URL: postgresql+asyncpg://multichat:multichat@testdb:5432/multichat_test
+      MULTICHAT_API_TOKEN: unused-tests-set-their-own
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]

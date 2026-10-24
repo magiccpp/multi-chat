@@ -10,3 +10,4 @@ config.yaml
 data/
 .mypy_cache/
 .ruff_cache/
+.ccr-ca.crt

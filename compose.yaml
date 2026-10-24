@@ -1,0 +1,38 @@
+# MultiChat server stack. Works with `docker compose` and `nerdctl compose`.
+#   cp .env.example .env && cp config.example.yaml config.yaml   # then edit both
+#   docker compose up -d        (or: nerdctl compose up -d)
+name: multichat
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-multichat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-multichat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: multichat-server:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-multichat}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-multichat}
+      DATA_DIR: /data
+      CONFIG_FILE: /config/config.yaml
+    ports:
+      - "${SERVER_BIND:-0.0.0.0}:${SERVER_PORT:-8000}:8000"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:

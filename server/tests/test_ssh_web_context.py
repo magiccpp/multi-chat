@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import subprocess
 
 import asyncssh
@@ -49,6 +50,7 @@ async def ssh_server(tmp_path_factory):
     server.close()
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 async def test_ssh_workspace_end_to_end(client, ssh_server, tmp_path):
     port, private_key, host_key = ssh_server
     root = tmp_path / "remote"
